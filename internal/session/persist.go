@@ -55,8 +55,30 @@ func generateUUID() string {
 }
 
 func encodeRepoPath(p string) string {
-	p = strings.TrimPrefix(p, "/")
-	return strings.ReplaceAll(p, "/", "-")
+	// Handle empty or invalid input
+	if p == "" {
+		return "empty"
+	}
+
+	vol := filepath.VolumeName(p)
+	p = p[len(vol):]
+
+	// Trim leading path separators
+	p = strings.TrimLeft(p, "/\\")
+
+	// Replace separators with -
+	p = strings.ReplaceAll(p, "/", "-")
+	p = strings.ReplaceAll(p, "\\", "-")
+
+	// Replace colons (from Windows drive letters)
+	vol = strings.ReplaceAll(vol, ":", "_")
+
+	// Handle edge case where path was only separators or volume name
+	result := vol + p
+	if result == "" {
+		return "empty"
+	}
+	return result
 }
 
 func (jw *jsonlWriter) open() error {
