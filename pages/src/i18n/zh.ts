@@ -163,6 +163,7 @@ export const zh: TranslationKeys = {
   'docs.reviewFlag9Desc': '输出受众：human（显示过程）或 agent（仅摘要）',
   'docs.reviewFlag10Desc': '每个文件的最大工具调用轮次；仅在大于模板默认值时生效',
   'docs.reviewFlag10Default': '内置',
+  'docs.reviewFlag11Desc': '最大并发 git 子进程数',
   'docs.reviewNote': '注意：<code>--from/--to</code> 和 <code>--commit</code> 不可同时使用。指定 <code>--from</code> 时必须同时指定 <code>--to</code>。',
 
   'docs.viewerTitle': 'ocr viewer',

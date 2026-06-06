@@ -374,6 +374,7 @@ const DocsPage: React.FC = () => {
                     ['--timeout', t('docs.reviewFlag8Desc'), '10'],
                     ['--audience', t('docs.reviewFlag9Desc'), 'human'],
                     ['--max-tools', t('docs.reviewFlag10Desc'), t('docs.reviewFlag10Default')],
+                    ['--max-git-procs', t('docs.reviewFlag11Desc'), t('docs.reviewFlag10Default')],
                   ].map(([flag, desc, def]) => (
                     <tr key={flag} className="border-b border-dark-800/30 hover:bg-dark-800/20 transition-colors">
                       <td className="py-2 px-3"><code className="text-brand-400 font-mono text-xs whitespace-nowrap">{flag}</code></td>

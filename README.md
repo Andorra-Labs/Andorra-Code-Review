@@ -251,6 +251,7 @@ See the [`examples/`](./examples/) directory for integration examples:
 | `--audience` | — | `human` | `human` (show progress) or `agent` (summary only) |
 | `--rule` | — | — | Path to custom JSON review rules |
 | `--max-tools` | — | built-in | Max tool call rounds per file; only takes effect when greater than template default |
+| `--max-git-procs` | — | built-in | Max concurrent git subprocesses |
 | `--tools` | — | — | Path to custom JSON tools config |
 
 ## Examples

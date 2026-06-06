@@ -251,6 +251,7 @@ ocr review \
 | `--audience` | — | `human` | `human`（显示进度）或 `agent`（仅输出摘要） |
 | `--rule` | — | — | 自定义 JSON 审查规则路径 |
 | `--max-tools` | — | 内置默认 | 每个文件的最大工具调用轮次；仅在大于模板默认值时生效 |
+| `--max-git-procs` | — | 内置默认 | 最大并发 git 子进程数 |
 | `--tools` | — | — | 自定义 JSON 工具配置路径 |
 
 ## 示例
