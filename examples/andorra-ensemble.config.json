@@ -1,0 +1,46 @@
+{
+    "provider": "anthropic",
+    "model": "claude-opus-4-7",
+    "providers": {
+        "anthropic": {
+            "api_key": "${env:OCR_ANTHROPIC_API_KEY}",
+            "models": ["claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-6"]
+        },
+        "openai": {
+            "api_key": "${env:OCR_OPENAI_API_KEY}",
+            "models": ["gpt-5.5"]
+        }
+    },
+    "ensemble": {
+        "enabled": true,
+        "scanners": [
+            {
+                "name": "opus",
+                "provider": "anthropic",
+                "model": "claude-opus-4-7",
+                "weight": 1.0
+            },
+            {
+                "name": "gpt",
+                "provider": "openai",
+                "model": "gpt-5.5",
+                "weight": 1.0
+            }
+        ],
+        "arbiter": {
+            "provider": "anthropic",
+            "model": "claude-opus-4-8",
+            "mode": "per_file"
+        },
+        "dedup": {
+            "line_overlap_min_ratio": 0.5,
+            "title_similarity_min": 0.7,
+            "require_same_path": true,
+            "existing_code_exact_boost": true
+        },
+        "output": {
+            "default_verdicts": ["accepted_bug"],
+            "show_provenance": false
+        }
+    }
+}
