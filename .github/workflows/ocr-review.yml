@@ -17,6 +17,10 @@
 #   vars.OCR_LLM_URL or secrets.OCR_LLM_URL - Bedrock LLM URL
 #   vars.OCR_LLM_USE_ANTHROPIC - Use Anthropic mode (default: false)
 #   secrets.TS_OAUTH_CLIENT_ID, secrets.TS_OAUTH_SECRET - Tailscale for Spark
+#
+# Fork PR note: `pull_request` events for fork PRs do not have access to
+# repository secrets. Fork PR authors should trigger review via the comment
+# flow (e.g. `@ocr`) which runs on `issue_comment` and has secret access.
 
 name: OCR Review
 
@@ -267,20 +271,33 @@ jobs:
             }
 
             const rawComments = extractComments(parsed);
+            const rawCount = rawComments.length;
             const evaluatedComments = rawComments.map((comment) => {
               const normalized = normalizeComment(comment);
               return { comment: normalized, decision: evaluateComment(normalized) };
             });
             const comments = evaluatedComments.filter((item) => item.decision.keep).map((item) => item.comment);
             const filteredComments = evaluatedComments.filter((item) => !item.decision.keep);
-            const filterDebug = formatFilterDebug(rawComments.length, comments.length, filteredComments);
+            const filterDebug = formatFilterDebug(rawCount, comments.length, filteredComments);
 
             if (comments.length === 0) {
+              let body = `OpenCodeReview: No actionable issues found.\n\n`;
+              // Surface partial-review metadata so reviewers see coverage gaps.
+              if (parsed.status === 'completed_with_errors') {
+                body += `⚠️ OCR status: **${parsed.status}**\n\n`;
+                if (parsed.message) body += `${parsed.message}\n\n`;
+                if (Array.isArray(parsed.warnings) && parsed.warnings.length > 0) {
+                  body += `Warnings:\n`;
+                  for (const w of parsed.warnings) body += `- ${w}\n`;
+                  body += '\n';
+                }
+              }
+              body += filterDebug;
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: prNumber,
-                body: `OpenCodeReview: No actionable issues found.\n\n${filterDebug}`
+                body: body
               });
               return;
             }
@@ -289,9 +306,16 @@ jobs:
             const summaryOnly = [];
             for (const c of comments) {
               const body = formatComment(c);
-              const line = c.end_line || c.start_line || c.line;
-              if (!c.path || !line || line < 1) summaryOnly.push({ comment: c, body });
-              else inlineComments.push({ path: c.path, line, side: 'RIGHT', body });
+              const startLine = c.start_line;
+              const endLine = c.end_line;
+              const line = c.line || endLine || startLine;
+              if (!c.path || !line || line < 1) {
+                summaryOnly.push({ comment: c, body });
+              } else if (startLine && endLine && startLine !== endLine) {
+                inlineComments.push({ path: c.path, start_line: startLine, line: endLine, start_side: 'RIGHT', side: 'RIGHT', body });
+              } else {
+                inlineComments.push({ path: c.path, line, side: 'RIGHT', body });
+              }
             }
 
             let summary = `OpenCodeReview found ${comments.length} actionable issue(s).\n\n`;
@@ -388,7 +412,9 @@ jobs:
             }
 
             function hasStructuredFinding(c) {
-              const hasLocation = Boolean(c.path && (c.line || c.start_line || c.end_line));
+              // Treat any comment with a path and body as structured, even when
+              // line fields are zero (OCR represents unresolved locations as 0).
+              const hasLocation = Boolean(c.path);
               const hasBody = Boolean(c.content || c.message || c.body || c.title || c.description || c.reason || c.suggestion);
               return hasLocation && hasBody;
             }
