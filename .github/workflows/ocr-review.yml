@@ -1,185 +1,307 @@
-# OpenCodeReview - GitHub Actions PR Auto-Review Demo
-#
-# This workflow automatically reviews pull requests using OpenCodeReview
-# and posts review comments directly on the PR.
+# OpenCodeReview - GitHub Actions PR Auto-Review
 #
 # Triggers:
-#   - PR opened (uses pull_request_target for fork secret access)
+#   - PR opened, synchronized, reopened, or marked ready_for_review
+#   - Comment on PR containing '/open-code-review', '@open-code-review' or '@ocr'
+#
+# Required repository variables:
+#   LLM_PROVIDER       - "bedrock" or "spark" (default: bedrock)
+#   OCR_LLM_MODEL      - Model name for Bedrock
+#   OCR_SPARK_LLM_MODEL - Model name for Spark
 #
 # Required secrets:
-#   OCR_LLM_URL        - LLM API endpoint (e.g., https://api.openai.com/v1/chat/completions)
-#   OCR_LLM_AUTH_TOKEN - Authentication token for the LLM API
+#   OCR_LLM_AUTH_TOKEN - Auth token for Bedrock
+#   OCR_SPARK_LLM_AUTH_TOKEN - Auth token for Spark
 #
-# Optional secrets:
-#   OCR_LLM_MODEL      - Model name (default: gpt-4o)
-#
-# Note: GITHUB_TOKEN is automatically provided by GitHub Actions.
+# Optional:
+#   vars.OCR_LLM_URL or secrets.OCR_LLM_URL - Bedrock LLM URL
+#   vars.OCR_LLM_USE_ANTHROPIC - Use Anthropic mode (default: false)
+#   secrets.TS_OAUTH_CLIENT_ID, secrets.TS_OAUTH_SECRET - Tailscale for Spark
 
-name: OpenCodeReview PR Review
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+name: OCR Review
 
 on:
-  # Use pull_request_target instead of pull_request so that secrets are
-  # available even for PRs from forks. This is safe because OCR only reads
-  # the diff and does not execute any code from the PR.
-  pull_request_target:
-    types: [opened]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ocr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   code-review:
-    runs-on: self-hosted
-    container:
-      image: node:20
-    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        (
+          github.event.comment.author_association == 'MEMBER' ||
+          github.event.comment.author_association == 'COLLABORATOR' ||
+          github.event.comment.author_association == 'OWNER'
+        ) &&
+        (
+          startsWith(github.event.comment.body, '/open-code-review') ||
+          startsWith(github.event.comment.body, '@open-code-review') ||
+          startsWith(github.event.comment.body, '@ocr')
+        )
+      )
+
     steps:
+      - name: Get PR context for comment trigger
+        id: pr-context
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('base_ref', pr.base.ref);
+            core.setOutput('head_sha', pr.head.sha);
+
+      - name: React OCR started
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request?.number || context.issue.number;
+            try {
+              await github.rest.reactions.createForIssue({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                content: 'eyes'
+              });
+            } catch (e) {
+              core.info(`Skipping reaction: ${e.message}`);
+            }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.16.0
+
+      - name: Install OpenCodeReview
+        run: npm install -g --registry https://registry.npmjs.org @alibaba-group/open-code-review
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history needed for merge-base diff
-          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || (github.event_name == 'issue_comment' && steps.pr-context.outputs.head_sha) || github.sha }}
 
-      - name: Mark repository as safe directory
-        run: git config --global --add safe.directory '*'
+      - name: Validate checkout ref
+        if: github.event_name == 'issue_comment'
+        shell: bash
+        run: |
+          if [ -z "${{ steps.pr-context.outputs.head_sha }}" ]; then
+            echo "ERROR: Could not resolve PR head SHA from pr-context step"
+            exit 1
+          fi
+          CURRENT_SHA=$(git rev-parse HEAD)
+          echo "Checked out SHA: $CURRENT_SHA"
+          if [ -z "$CURRENT_SHA" ] || [ "$CURRENT_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "ERROR: Failed to checkout valid revision"
+            exit 1
+          fi
 
-      - name: Fetch PR head ref (ensures fork commits are available)
-        run: git fetch origin pull/${{ github.event.pull_request.number }}/head
+      - name: Fetch base branch
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
+          else
+            BASE_REF="${{ steps.pr-context.outputs.base_ref }}"
+          fi
+          git fetch origin "${BASE_REF}:${BASE_REF}" || git fetch origin "${BASE_REF}"
 
-      - name: Install OpenCodeReview
-        run: npm install -g @alibaba-group/open-code-review
+      - name: Resolve LLM provider
+        id: llm-provider
+        shell: bash
+        env:
+          LLM_PROVIDER_FROM_VAR: ${{ vars.LLM_PROVIDER }}
+        run: |
+          PROVIDER="$(printf '%s' "${LLM_PROVIDER_FROM_VAR:-bedrock}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | tr -d '"' | tr -d "'")"
+          echo "Resolved LLM provider: $PROVIDER"
+          if [ "$PROVIDER" != "bedrock" ] && [ "$PROVIDER" != "spark" ]; then
+            echo "Invalid LLM_PROVIDER: $PROVIDER"
+            echo "Set repository variable LLM_PROVIDER to exactly bedrock or spark."
+            exit 1
+          fi
+          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - name: Connect to Tailscale for Spark
+        if: ${{ steps.llm-provider.outputs.provider == 'spark' }}
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
 
       - name: Configure OCR
+        shell: bash
+        env:
+          LLM_PROVIDER: ${{ steps.llm-provider.outputs.provider }}
+          BEDROCK_LLM_URL_FROM_VAR: ${{ vars.OCR_LLM_URL }}
+          BEDROCK_LLM_URL_FROM_SECRET: ${{ secrets.OCR_LLM_URL }}
+          BEDROCK_LLM_AUTH_TOKEN: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          BEDROCK_LLM_MODEL: ${{ vars.OCR_LLM_MODEL }}
+          BEDROCK_LLM_USE_ANTHROPIC: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          SPARK_LLM_URL: http://spark.tail93d320.ts.net:9090/v1
+          SPARK_LLM_AUTH_TOKEN: ${{ secrets.OCR_SPARK_LLM_AUTH_TOKEN }}
+          SPARK_LLM_MODEL: ${{ vars.OCR_SPARK_LLM_MODEL }}
         run: |
-          ocr config set llm.url ${{ secrets.OCR_LLM_URL }}
-          ocr config set llm.auth_token ${{ secrets.OCR_LLM_AUTH_TOKEN }}
-          ocr config set llm.model ${{ secrets.OCR_LLM_MODEL }}
-          ocr config set llm.use_anthropic ${{ secrets.OCR_LLM_USE_ANTHROPIC }}
-          ocr config set llm.extra_body '{"enable_thinking": false}'
-          ocr config set language English
+          if [ "$LLM_PROVIDER" = "spark" ]; then
+            if [ -z "$SPARK_LLM_AUTH_TOKEN" ]; then
+              echo "WARNING: secrets.OCR_SPARK_LLM_AUTH_TOKEN is not set, using dummy token"
+            fi
+            if [ -z "$SPARK_LLM_MODEL" ]; then
+              echo "WARNING: vars.OCR_SPARK_LLM_MODEL is not set, using default model"
+            fi
+            ocr config set llm.url "$SPARK_LLM_URL"
+            ocr config set llm.auth_token "${SPARK_LLM_AUTH_TOKEN:-dummy}"
+            ocr config set llm.model "${SPARK_LLM_MODEL:-Qwen3.5-122B-A10B-FP8}"
+            ocr config set llm.use_anthropic "false"
+          else
+            BEDROCK_LLM_URL="${BEDROCK_LLM_URL_FROM_VAR:-$BEDROCK_LLM_URL_FROM_SECRET}"
+            if [ -z "$BEDROCK_LLM_URL" ]; then
+              echo "Missing Bedrock LLM URL. Set vars.OCR_LLM_URL or secrets.OCR_LLM_URL."
+              exit 1
+            fi
+            if [ -z "$BEDROCK_LLM_AUTH_TOKEN" ]; then
+              echo "Missing secrets.OCR_LLM_AUTH_TOKEN."
+              exit 1
+            fi
+            if [ -z "$BEDROCK_LLM_MODEL" ]; then
+              echo "Missing vars.OCR_LLM_MODEL."
+              exit 1
+            fi
+            ocr config set llm.url "$BEDROCK_LLM_URL"
+            ocr config set llm.auth_token "$BEDROCK_LLM_AUTH_TOKEN"
+            ocr config set llm.model "$BEDROCK_LLM_MODEL"
+            ocr config set llm.use_anthropic "${BEDROCK_LLM_USE_ANTHROPIC:-false}"
+          fi
+
+      - name: Test OCR connection
+        run: ocr llm test
 
       - name: Run OpenCodeReview
-        id: review
+        shell: bash
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-
-          echo "Reviewing PR: ${HEAD_SHA} against origin/${BASE_REF}"
-
-          # Run OCR in range mode with JSON output
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_REF="${{ steps.pr-context.outputs.base_ref }}"
+            HEAD_SHA="${{ steps.pr-context.outputs.head_sha }}"
+          fi
+          echo "Reviewing ${HEAD_SHA} against origin/${BASE_REF}"
           ocr review \
             --from "origin/${BASE_REF}" \
             --to "${HEAD_SHA}" \
             --format json \
-            > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log || true
+            --audience agent \
+            --concurrency 4 \
+            > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log
 
-          echo "OCR review completed. Output:"
+          if [ ! -s /tmp/ocr-result.json ]; then
+            echo "ERROR: OCR produced no output or failed"
+            cat /tmp/ocr-stderr.log
+            exit 1
+          fi
+
+          cat /tmp/ocr-stderr.log || true
           cat /tmp/ocr-result.json
-          echo "OCR review completed. Error log:"
-          cat /tmp/ocr-stderr.log
 
-      - name: Post review comments to PR
+      - name: Post OCR review to PR
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = '/tmp/ocr-result.json';
+            const prNumber = context.payload.pull_request?.number || context.issue.number;
+            const commitSha = context.payload.pull_request?.head?.sha || '${{ steps.pr-context.outputs.head_sha }}';
 
-            // Read OCR output
-            let result;
+            let parsed = {};
             try {
-              const raw = fs.readFileSync(path, 'utf8');
-              result = JSON.parse(raw);
-            } catch (e) {
-              console.log('Failed to parse OCR output:', e.message);
-              // Post a simple comment if parsing fails
-              const stderr = fs.readFileSync('/tmp/ocr-stderr.log', 'utf8').trim();
-              if (stderr) {
+              const raw = fs.readFileSync('/tmp/ocr-result.json', 'utf8').trim();
+              if (!raw) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `⚠️ **OpenCodeReview** encountered an error:\n${fencedBlock(stderr)}`
+                  issue_number: prNumber,
+                  body: 'OpenCodeReview produced no output. This may indicate a failure. Check the workflow logs for details.'
                 });
+                return;
               }
-              return;
-            }
-
-            const comments = result.comments || [];
-            const warnings = result.warnings || [];
-
-            // If no comments, post a summary
-            if (comments.length === 0) {
-              const message = result.message || 'No comments generated. Looks good to me.';
+              parsed = JSON.parse(raw);
+              if (!parsed || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
+                const stderr = fs.existsSync('/tmp/ocr-stderr.log') ? fs.readFileSync('/tmp/ocr-stderr.log', 'utf8') : '';
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: `OpenCodeReview produced empty output. This may indicate a failure.\n\n${stderr.slice(0, 6000)}`
+                });
+                return;
+              }
+            } catch (e) {
+              const stderr = fs.existsSync('/tmp/ocr-stderr.log') ? fs.readFileSync('/tmp/ocr-stderr.log', 'utf8') : '';
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: `✅ **OpenCodeReview**: ${message}`
+                issue_number: prNumber,
+                body: `OpenCodeReview failed to parse output.\n\n${stderr.slice(0, 6000)}`
               });
               return;
             }
 
-            // Prepare PR review with inline comments
-            const prNumber = context.issue.number;
-            let commitSha = context.payload.pull_request.head.sha;
+            const rawComments = extractComments(parsed);
+            const evaluatedComments = rawComments.map((comment) => {
+              const normalized = normalizeComment(comment);
+              return { comment: normalized, decision: evaluateComment(normalized) };
+            });
+            const comments = evaluatedComments.filter((item) => item.decision.keep).map((item) => item.comment);
+            const filteredComments = evaluatedComments.filter((item) => !item.decision.keep);
+            const filterDebug = formatFilterDebug(rawComments.length, comments.length, filteredComments);
 
-            // Build review comments array for the PR review API
-            // Only inline comments with line info can be posted via createReview
-            const reviewComments = [];
-            const commentsWithoutLine = [];
-
-            for (const comment of comments) {
-              const body = formatComment(comment);
-
-              // Check if comment has valid line information for inline comment (line >= 1)
-              const hasValidLine = (comment.start_line >= 1) || (comment.end_line >= 1);
-              if (!hasValidLine) {
-                commentsWithoutLine.push({ comment, body });
-                continue;
-              }
-
-              const reviewComment = {
-                path: comment.path,
-                body: body
-              };
-
-              // Use line range if available
-              if (comment.start_line >= 1 && comment.end_line >= 1 && comment.start_line !== comment.end_line) {
-                reviewComment.start_line = comment.start_line;
-                reviewComment.line = comment.end_line;
-                reviewComment.start_side = 'RIGHT';
-                reviewComment.side = 'RIGHT';
-              } else if (comment.end_line >= 1) {
-                reviewComment.line = comment.end_line;
-                reviewComment.side = 'RIGHT';
-              } else if (comment.start_line >= 1) {
-                reviewComment.line = comment.start_line;
-                reviewComment.side = 'RIGHT';
-              }
-
-              reviewComments.push({ comment, reviewComment });
+            if (comments.length === 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `OpenCodeReview: No actionable issues found.\n\n${filterDebug}`
+              });
+              return;
             }
 
-            // Submit as a single PR review with all comments
-            const totalCount = comments.length;
-            const inlineCount = reviewComments.length;
-            const summaryCount = commentsWithoutLine.length;
-            let summaryBody = buildSummaryBody(totalCount, inlineCount, summaryCount, warnings);
+            const inlineComments = [];
+            const summaryOnly = [];
+            for (const c of comments) {
+              const body = formatComment(c);
+              const line = c.end_line || c.start_line || c.line;
+              if (!c.path || !line || line < 1) summaryOnly.push({ comment: c, body });
+              else inlineComments.push({ path: c.path, line, side: 'RIGHT', body });
+            }
 
-            // Add comments without line info to summary body
-            summaryBody += formatSummaryComments(commentsWithoutLine);
+            let summary = `OpenCodeReview found ${comments.length} actionable issue(s).\n\n`;
+            summary += `- ${inlineComments.length} inline comment(s)\n`;
+            summary += `- ${summaryOnly.length} summary comment(s)\n\n`;
+            summary += filterDebug;
 
-            // Statistics tracking
-            let successCount = 0;
-            let failedCount = 0;
-            const failedComments = [];
+            for (const item of summaryOnly) {
+              summary += `\n---\n\n${item.comment.path || 'unknown file'}\n\n${item.body}\n`;
+            }
 
             try {
               await github.rest.pulls.createReview({
@@ -187,127 +309,130 @@ jobs:
                 repo: context.repo.repo,
                 pull_number: prNumber,
                 commit_id: commitSha,
-                body: summaryBody,
                 event: 'COMMENT',
-                comments: reviewComments.map(({ reviewComment }) => reviewComment)
+                body: summary,
+                comments: inlineComments
               });
-              successCount = reviewComments.length;
-              console.log(`Successfully posted review with ${successCount} inline comments (${commentsWithoutLine.length} in summary)`);
             } catch (e) {
-              console.log('Failed to post review with inline comments:', e.message);
-              console.log('Falling back to posting comments individually...');
-              
-              // Fallback: post comments one by one
-              for (const { comment, reviewComment } of reviewComments) {
-                try {
-                  await github.rest.pulls.createReview({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    pull_number: prNumber,
-                    commit_id: commitSha,
-                    body: '',
-                    event: 'COMMENT',
-                    comments: [reviewComment]
-                  });
-                  successCount++;
-                  console.log(`Successfully posted comment for ${reviewComment.path}`);
-                } catch (innerE) {
-                  failedCount++;
-                  failedComments.push({ comment, error: innerE.message });
-                  console.log(`Failed to post comment for ${reviewComment.path}: ${innerE.message}`);
-                }
+              let body = `${summary}\n\nCould not post inline comments: ${e.message}\n`;
+              for (const c of comments) {
+                const line = c.end_line || c.start_line || c.line || '?';
+                body += `\n---\n\n${c.path || 'unknown file'}:${line}\n\n${formatComment(c)}\n`;
               }
-              
-              // Post summary comment with statistics
-              let finalBody = buildSummaryBody(totalCount, successCount, commentsWithoutLine.length + failedComments.length, warnings);
-              finalBody += formatSummaryComments(commentsWithoutLine);
-              finalBody += `\n\n---\n\n📊 **Posting Statistics:**`;
-              finalBody += `\n- ✅ Successfully posted: ${successCount} comment(s)`;
-              if (failedCount > 0) {
-                finalBody += `\n- ❌ Failed to post: ${failedCount} comment(s)`;
+              const MAX_LENGTH = 65000;
+              if (body.length > MAX_LENGTH) {
+                body = body.slice(0, MAX_LENGTH - 200) + '\n\n⚠️ **CONTENT TRUNCATED**: Review output exceeded 65000 characters. Some findings may be missing. Check workflow logs for complete output.';
               }
-              
-              // Add failed comments as summary content so review feedback is not lost.
-              if (failedComments.length > 0) {
-                finalBody += '\n\n---\n\n### ⚠️ Inline comments shown in summary';
-                for (const { comment, error } of failedComments) {
-                  finalBody += '\n\n---\n\n';
-                  finalBody += formatCommentMarkdown(comment, error);
-                }
-              }
-              
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: prNumber,
-                body: finalBody
+                body: body
               });
             }
 
-            function formatComment(comment) {
-              let body = comment.content || '';
+            function extractComments(result) {
+              if (Array.isArray(result)) return result;
+              for (const key of ['comments', 'issues', 'findings', 'results']) {
+                if (Array.isArray(result[key])) return result[key];
+              }
+              return [];
+            }
 
-              // Add code suggestion if available
-              if (comment.suggestion_code && comment.existing_code) {
-                body += '\n\n**Suggestion:**\n';
-                body += fencedBlock(comment.suggestion_code, 'suggestion');
+            function normalizeComment(c) {
+              const text = getCommentText(c);
+              const normalized = { ...c };
+              const current = String(c.severity || c.priority || c.level || '').toUpperCase();
+              if (!current) {
+                if (/\b(P0|CRITICAL|BLOCKER)\b/i.test(text)) normalized.severity = 'P0';
+                else if (/\b(P1|HIGH|MAJOR)\b/i.test(text)) normalized.severity = 'P1';
+                else if (/\b(P2|MEDIUM|MINOR)\b/i.test(text)) normalized.severity = 'P2';
+                else if (/\b(P3|LOW|NIT|STYLE|INFO)\b/i.test(text)) normalized.severity = 'P3';
+              }
+              return normalized;
+            }
+
+            function evaluateComment(c) {
+              const text = getCommentText(c);
+              const severity = String(c.severity || c.priority || c.level || '').toUpperCase();
+
+              if (['P3', 'LOW', 'MINOR', 'NIT', 'STYLE', 'INFO', 'SUGGESTION'].includes(severity)) {
+                return { keep: false, reason: `low severity ${severity}` };
               }
 
+              if (['P0', 'P1', 'P2', 'CRITICAL', 'BLOCKER', 'HIGH', 'MAJOR', 'MEDIUM'].includes(severity)) {
+                return { keep: true, reason: `kept severity ${severity}` };
+              }
+
+              if (isNitOnly(text)) {
+                return { keep: false, reason: 'nit/style-only text' };
+              }
+
+              if (hasStructuredFinding(c)) {
+                return { keep: true, reason: 'kept structured finding without severity' };
+              }
+
+              if (hasDangerSignal(text)) {
+                return { keep: true, reason: 'kept danger-pattern finding without severity' };
+              }
+
+              return { keep: false, reason: 'no severity and no actionable signal' };
+            }
+
+            function isNitOnly(text) {
+              return /(nitpick|nit:|style|readability|prefer|consider|could be|might be better|best practice|cleaner|naming|rename|comment|documentation|docs|formatting|whitespace|indentation|minor refactor|minor issue|dry|duplicate code|maintainability|cosmetic|subjective|non-blocking)/i.test(text) && !hasDangerSignal(text);
+            }
+
+            function hasDangerSignal(text) {
+              return /(crash|exception|throws|undefined|null pointer|null reference|race condition|deadlock|auth|authentication|authorization|permission|tenant|cross-tenant|data loss|data corruption|corruption|leak|secret|credential|sql injection|xss|csrf|xsrf|ssrf|idor|privilege escalation|priv escalation|path traversal|directory traversal|command injection|os injection|deserialization|buffer overflow|injection|token|jwt|session|encryption|decryption|ssl|tls|certificate|payment|billing|migration|production outage|regression|incorrect result|wrong data|broken api|runtime error|destructive|timeout|infinite loop|memory leak|fails at runtime|failure at runtime)/i.test(text);
+            }
+
+            function hasStructuredFinding(c) {
+              const hasLocation = Boolean(c.path && (c.line || c.start_line || c.end_line));
+              const hasBody = Boolean(c.content || c.message || c.body || c.title || c.description || c.reason || c.suggestion);
+              return hasLocation && hasBody;
+            }
+
+            function formatFilterDebug(rawCount, keptCount, filtered) {
+              const reasonCounts = {};
+              for (const item of filtered) {
+                reasonCounts[item.decision.reason] = (reasonCounts[item.decision.reason] || 0) + 1;
+              }
+
+              let text = `OCR filter debug:\n`;
+              text += `- Raw OCR findings: ${rawCount}\n`;
+              text += `- Posted findings: ${keptCount}\n`;
+              text += `- Filtered findings: ${filtered.length}\n`;
+
+              if (filtered.length > 0) {
+                text += `- Filter reasons:\n`;
+                for (const [reason, count] of Object.entries(reasonCounts)) {
+                  text += `  - ${reason}: ${count}\n`;
+                }
+
+                text += `\nFiltered sample:\n`;
+                for (const item of filtered.slice(0, 5)) {
+                  const c = item.comment;
+                  const line = c.line || c.start_line || c.end_line || '?';
+                  const snippet = getCommentText(c).replace(/\s+/g, ' ').slice(0, 220);
+                  text += `- ${item.decision.reason} | ${c.path || 'unknown file'}:${line} | ${snippet}\n`;
+                }
+              }
+
+              return text.trim();
+            }
+
+            function getCommentText(c) {
+              return [c.content, c.message, c.body, c.title, c.reason, c.description, c.suggestion, c.severity, c.priority, c.level]
+                .filter(Boolean)
+                .join('\n')
+                .toLowerCase();
+            }
+
+            function formatComment(c) {
+              let body = c.content || c.message || c.body || JSON.stringify(c, null, 2);
+              const severity = c.severity || c.priority || c.level;
+              if (severity && !body.toLowerCase().includes(String(severity).toLowerCase())) body = `Severity: ${severity}\n\n${body}`;
+              if (c.suggestion_code) body += `\n\nSuggestion:\n\`\`\`suggestion\n${c.suggestion_code}\n\`\`\``;
               return body;
-            }
-
-            function formatCommentMarkdown(comment, error) {
-              let md = `### 📄 \`${comment.path}\``;
-              if (comment.start_line && comment.end_line) {
-                md += ` (L${comment.start_line}-L${comment.end_line})`;
-              }
-              md += '\n\n';
-              if (error) {
-                md += `⚠️ GitHub could not post this as an inline comment: ${error}\n\n`;
-              }
-              md += comment.content || '';
-
-              if (comment.suggestion_code && comment.existing_code) {
-                md += '\n\n<details><summary>💡 Suggested Change</summary>\n\n';
-                md += '**Before:**\n' + fencedBlock(comment.existing_code) + '\n\n';
-                md += '**After:**\n' + fencedBlock(comment.suggestion_code) + '\n\n';
-                md += '</details>';
-              }
-
-              return md;
-            }
-
-            function buildSummaryBody(totalCount, inlineCount, summaryCount, warnings) {
-              let body = `🔍 **OpenCodeReview** found **${totalCount}** issue(s) in this PR.`;
-              if (totalCount > 0) {
-                body += `\n- ✅ ${inlineCount} posted as inline comment(s)`;
-                body += `\n- 📝 ${summaryCount} posted as summary`;
-              }
-              if (warnings.length > 0) {
-                body += `\n\n⚠️ ${warnings.length} warning(s) occurred during review.`;
-              }
-              return body;
-            }
-
-            function formatSummaryComments(summaryComments) {
-              let body = '';
-              for (const { comment } of summaryComments) {
-                body += '\n\n---\n\n';
-                body += formatCommentMarkdown(comment);
-              }
-              return body;
-            }
-
-            function fencedBlock(content, language = '') {
-              const text = String(content || '');
-              const fence = safeFence(text);
-              let block = fence + language + '\n' + text;
-              if (!text.endsWith('\n')) block += '\n';
-              return block + fence;
-            }
-
-            function safeFence(content) {
-              const matches = String(content || '').match(/`+/g) || [];
-              const maxTicks = matches.reduce((max, ticks) => Math.max(max, ticks.length), 0);
-              return '`'.repeat(Math.max(3, maxTicks + 1));
             }
