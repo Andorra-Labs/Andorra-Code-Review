@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"github.com/open-code-review/open-code-review/internal/agent"
+	"github.com/open-code-review/open-code-review/internal/arbiter"
 	"github.com/open-code-review/open-code-review/internal/config/rules"
 	"github.com/open-code-review/open-code-review/internal/config/template"
 	"github.com/open-code-review/open-code-review/internal/config/toolsconfig"
 	"github.com/open-code-review/open-code-review/internal/configstore"
+	"github.com/open-code-review/open-code-review/internal/dedup"
 	"github.com/open-code-review/open-code-review/internal/diff"
 	"github.com/open-code-review/open-code-review/internal/ensemble"
 	"github.com/open-code-review/open-code-review/internal/finding"
@@ -237,7 +239,7 @@ func runAndorraReview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve arbiter: %w", err)
 	}
-	arbiter := &ensemble.ArbiterEndpoint{
+	arbiterEndpoint := &ensemble.ArbiterEndpoint{
 		Spec:     *ext.Ensemble.Arbiter,
 		Endpoint: arbiterEp,
 	}
@@ -301,7 +303,7 @@ func runAndorraReview(args []string) error {
 
 	orch := &ensemble.Orchestrator{
 		Scanners: scanners,
-		Arbiter:  arbiter,
+		Arbiter:  arbiterEndpoint,
 		Run:      run,
 	}
 
@@ -339,7 +341,32 @@ func runAndorraReview(args []string) error {
 		)
 	}
 
-	finals := wrapRawAsFinals(result.Raw)
+	dedupCfg := dedup.FromConfigStore(ext.Ensemble.Dedup)
+	groups := dedup.Group(result.Raw, dedupCfg)
+	telemetry.Event(ctx, "dedup.completed",
+		telemetry.AnyToAttr("raw_count", len(result.Raw)),
+		telemetry.AnyToAttr("group_count", len(groups)),
+	)
+
+	diffsByPath := buildDiffMap(parsedDiffs)
+	arbiterCfg := arbiter.FromConfigStore(*ext.Ensemble.Arbiter, arbiterModel)
+	telemetry.Event(ctx, "arbiter.started",
+		telemetry.AnyToAttr("arbiter.mode", arbiterCfg.Mode),
+		telemetry.AnyToAttr("group.count", len(groups)),
+	)
+	arbiterClient := llm.NewLLMClient(arbiterEp)
+	finals := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
+	verdictCounts := map[finding.Verdict]int{}
+	for _, f := range finals {
+		verdictCounts[f.Verdict]++
+	}
+	telemetry.Event(ctx, "arbiter.completed",
+		telemetry.AnyToAttr("accepted", verdictCounts[finding.VerdictAccepted]),
+		telemetry.AnyToAttr("rejected", verdictCounts[finding.VerdictRejected]),
+		telemetry.AnyToAttr("uncertain", verdictCounts[finding.VerdictUncertain]),
+		telemetry.AnyToAttr("style_only", verdictCounts[finding.VerdictStyleOnly]),
+	)
+
 	renderOpts := finding.RenderOptions{ShowProvenance: eopts.showProvenance}
 	if ext.Ensemble.Output != nil && ext.Ensemble.Output.ShowProvenance {
 		renderOpts.ShowProvenance = true

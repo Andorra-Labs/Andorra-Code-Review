@@ -13,19 +13,15 @@ import (
 	"github.com/open-code-review/open-code-review/internal/model"
 )
 
-// wrapRawAsFinals turns raw findings into FinalFindings. In Phase 4 this is a
-// placeholder that wraps each raw as a singleton group with VerdictAccepted,
-// so users see all scanner output. Phase 5 replaces it with dedup + arbiter.
-func wrapRawAsFinals(raw []finding.RawFinding) []finding.FinalFinding {
-	out := make([]finding.FinalFinding, 0, len(raw))
-	for i, r := range raw {
-		gid := fmt.Sprintf("g-%d", i)
-		f := finding.Singleton(r, gid)
-		out = append(out, finding.FinalFinding{
-			Finding:    f,
-			Verdict:    finding.VerdictAccepted,
-			Confidence: r.Confidence,
-		})
+// buildDiffMap builds the path->diff lookup the arbiter uses for evidence.
+func buildDiffMap(diffs []model.Diff) map[string]string {
+	out := make(map[string]string, len(diffs))
+	for _, d := range diffs {
+		path := d.NewPath
+		if path == "" {
+			path = d.OldPath
+		}
+		out[path] = d.Diff
 	}
 	return out
 }
