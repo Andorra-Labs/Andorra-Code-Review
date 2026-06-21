@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} — Andorra OCR</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1><a href="/">Andorra OCR</a></h1>
+    <nav>
+      <a href="/">Overview</a>
+      <a href="/ensemble">Ensemble</a>
+      <a href="/export">Export</a>
+    </nav>
+  </header>
+  <main>
+    {{if .Flash}}<div class="flash {{.FlashKind}}">{{.Flash}}</div>{{end}}
+    {{if .Errors}}<div class="flash error">
+      <strong>Validation failed:</strong>
+      <ul>{{range .Errors}}<li>{{.}}</li>{{end}}</ul>
+    </div>{{end}}
+    {{.Body}}
+  </main>
+  <footer>
+    <p>Local config UI · serving <code>{{.ConfigPath}}</code></p>
+  </footer>
+</body>
+</html>

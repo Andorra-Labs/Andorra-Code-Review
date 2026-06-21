@@ -1,0 +1,76 @@
+<section>
+  <h2>Ensemble configuration</h2>
+  <form method="POST" action="/ensemble" id="ensemble-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+    <fieldset>
+      <legend>General</legend>
+      <label>
+        <input type="checkbox" name="enabled" value="true" {{if .E.Enabled}}checked{{end}}>
+        Enable ensemble mode (requires ≥2 scanners + an arbiter)
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Scanners</legend>
+      <p class="hint">Each scanner must point at a provider configured in your upstream config (presets like <code>anthropic</code>, <code>openai</code> work out of the box).</p>
+      <table id="scanners-table">
+        <thead>
+          <tr><th>Name</th><th>Provider</th><th>Model</th><th>Weight</th><th></th></tr>
+        </thead>
+        <tbody>
+          {{range $i, $s := .Scanners}}
+          <tr>
+            <td><input name="scanner_name_{{$i}}" value="{{$s.Name}}" required></td>
+            <td><input name="scanner_provider_{{$i}}" value="{{$s.Provider}}" required></td>
+            <td><input name="scanner_model_{{$i}}" value="{{$s.Model}}"></td>
+            <td><input name="scanner_weight_{{$i}}" value="{{$s.Weight}}" type="number" step="0.1" min="0" style="width:5em"></td>
+            <td><button type="button" class="remove-row">×</button></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      <button type="button" id="add-scanner">+ Add scanner</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Arbiter</legend>
+      <label>Provider <input name="arbiter_provider" value="{{.A.Provider}}"></label>
+      <label>Model <input name="arbiter_model" value="{{.A.Model}}"></label>
+      <label>Mode
+        <select name="arbiter_mode">
+          <option value="" {{if eq .A.Mode ""}}selected{{end}}>(default: per_file)</option>
+          <option value="per_file" {{if eq .A.Mode "per_file"}}selected{{end}}>per_file</option>
+          <option value="per_group" {{if eq .A.Mode "per_group"}}selected{{end}}>per_group</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Dedup thresholds</legend>
+      <label>Line overlap min ratio
+        <input name="dedup_line_overlap" type="number" step="0.05" min="0" max="1" value="{{.D.LineOverlapMinRatio}}">
+      </label>
+      <label>Title similarity min
+        <input name="dedup_title_sim" type="number" step="0.05" min="0" max="1" value="{{.D.TitleSimilarityMin}}">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Output defaults</legend>
+      <label>Default verdict filter (comma-separated)
+        <input name="output_default_verdicts" value="{{.OutputVerdictsCSV}}" placeholder="accepted_bug">
+      </label>
+      <label>
+        <input type="checkbox" name="output_show_provenance" value="true" {{if .O.ShowProvenance}}checked{{end}}>
+        Show scanner provenance in output
+      </label>
+    </fieldset>
+
+    <p>
+      <button type="submit" class="primary">Save</button>
+      <a class="button secondary" href="/">Cancel</a>
+    </p>
+  </form>
+</section>
+<script src="/static/app.js"></script>

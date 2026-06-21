@@ -1,0 +1,17 @@
+<section>
+  <h2>Export configuration for CI</h2>
+  <p>Download a sanitized copy of your config file safe to commit to a repository. API keys are replaced with <code>${env:NAME}</code> placeholders by default; CI provides them via secrets.</p>
+  <form method="POST" action="/export">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <fieldset>
+      <legend>Secret handling</legend>
+      <label><input type="radio" name="mode" value="placeholder" checked> <strong>Placeholder</strong> — replace with <code>${env:NAME}</code> (recommended)</label>
+      <label><input type="radio" name="mode" value="strip"> <strong>Strip</strong> — remove API key fields entirely</label>
+    </fieldset>
+    <p>
+      <button type="submit" class="primary">Download .ocr/config.json</button>
+      <a class="button secondary" href="/">Cancel</a>
+    </p>
+  </form>
+  <p class="hint">After download, commit the file under <code>.ocr/config.json</code> in the repo you want CI to review. The example workflow at <code>.github/workflows/andorra-ocr-review.yml</code> picks it up automatically.</p>
+</section>

@@ -1,0 +1,448 @@
+// Package webui is the fork's local web config UI. It edits ONLY the
+// ensemble extension block via internal/configstore; upstream provider /
+// model / llm credentials stay editable via the existing CLI surfaces.
+//
+// The server mirrors internal/viewer/server.go in style (stdlib net/http,
+// embed.FS, html/template, host-guard middleware) but does not import
+// viewer — see internal/httpguard for the duplicated guard.
+package webui
+
+import (
+	"crypto/rand"
+	"embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"io/fs"
+	"net/http"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/open-code-review/open-code-review/internal/configstore"
+	"github.com/open-code-review/open-code-review/internal/httpguard"
+)
+
+//go:embed templates/*.html static/*.css static/*.js
+var assets embed.FS
+
+// Options configure StartServer.
+type Options struct {
+	Addr        string // e.g. "localhost:5484"
+	ConfigPath  string // absolute path to ~/.opencodereview/config.json
+	OpenBrowser bool
+}
+
+// StartServer launches the web UI and blocks until the server stops.
+func StartServer(opts Options) error {
+	if opts.Addr == "" {
+		opts.Addr = "localhost:5484"
+	}
+	if opts.ConfigPath == "" {
+		p, err := configstore.DefaultPath()
+		if err != nil {
+			return err
+		}
+		opts.ConfigPath = p
+	}
+
+	srvState := &server{
+		configPath: opts.ConfigPath,
+		csrfToken:  randomToken(),
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS()))))
+	mux.HandleFunc("/", srvState.handleOverview)
+	mux.HandleFunc("/ensemble", srvState.handleEnsemble)
+	mux.HandleFunc("/export", srvState.handleExport)
+
+	allowed := httpguard.ResolveAllowedHostsFromEnv(opts.Addr)
+	handler := httpguard.Middleware(allowed, mux)
+
+	srv := &http.Server{
+		Addr:         opts.Addr,
+		Handler:      handler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+	}
+
+	fmt.Printf("\nAndorra OCR config UI: http://%s\n", opts.Addr)
+	fmt.Printf("Editing: %s\n\n", opts.ConfigPath)
+	if opts.OpenBrowser {
+		go openBrowser("http://" + opts.Addr)
+	}
+	return srv.ListenAndServe()
+}
+
+type server struct {
+	configPath string
+	csrfToken  string
+	flashMu    sync.Mutex
+	flash      string
+	flashKind  string // "success" | "error"
+}
+
+func (s *server) consumeFlash() (string, string) {
+	s.flashMu.Lock()
+	defer s.flashMu.Unlock()
+	f, k := s.flash, s.flashKind
+	s.flash, s.flashKind = "", ""
+	return f, k
+}
+
+func (s *server) setFlash(msg, kind string) {
+	s.flashMu.Lock()
+	defer s.flashMu.Unlock()
+	s.flash, s.flashKind = msg, kind
+}
+
+func (s *server) handleOverview(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	ext, _ := configstore.LoadAndorra(s.configPath)
+	overview := overviewData(s.configPath, ext)
+	body := renderInner("overview.html", overview)
+	s.renderLayout(w, "Overview", body, nil)
+}
+
+func (s *server) handleEnsemble(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.renderEnsembleForm(w, nil, nil)
+	case http.MethodPost:
+		s.handleEnsembleSubmit(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) renderEnsembleForm(w http.ResponseWriter, ext *configstore.AndorraExt, errs []error) {
+	if ext == nil {
+		ext, _ = configstore.LoadAndorra(s.configPath)
+	}
+	if ext == nil {
+		ext = &configstore.AndorraExt{}
+	}
+	data := ensembleData(ext, s.csrfToken)
+	body := renderInner("ensemble.html", data)
+	s.renderLayout(w, "Ensemble", body, errs)
+}
+
+func (s *server) handleEnsembleSubmit(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if r.PostFormValue("csrf_token") != s.csrfToken {
+		http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+		return
+	}
+	ext := buildExtFromForm(r)
+	if errs := configstore.Validate(ext); len(errs) > 0 {
+		s.renderEnsembleForm(w, ext, errs)
+		return
+	}
+	if err := configstore.SaveAndorra(s.configPath, ext); err != nil {
+		s.renderEnsembleForm(w, ext, []error{err})
+		return
+	}
+	s.setFlash("Ensemble configuration saved.", "success")
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		body := renderInner("export.html", map[string]any{"CSRFToken": s.csrfToken})
+		s.renderLayout(w, "Export", body, nil)
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "parse form: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if r.PostFormValue("csrf_token") != s.csrfToken {
+			http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+			return
+		}
+		mode := configstore.ModePlaceholder
+		if r.PostFormValue("mode") == "strip" {
+			mode = configstore.ModeStrip
+		}
+		data, err := configstore.Export(s.configPath, configstore.ExportOptions{Mode: mode})
+		if err != nil {
+			http.Error(w, "export: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="config.json"`)
+		_, _ = w.Write(data)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func staticFS() fs.FS {
+	sub, err := fs.Sub(assets, "static")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
+
+var layoutTmpl = func() *template.Template {
+	t, err := template.ParseFS(assets, "templates/layout.html")
+	if err != nil {
+		panic(err)
+	}
+	return t
+}()
+
+func (s *server) renderLayout(w http.ResponseWriter, title string, body template.HTML, errs []error) {
+	flash, kind := s.consumeFlash()
+	data := map[string]any{
+		"Title":      title,
+		"Body":       body,
+		"Flash":      flash,
+		"FlashKind":  kind,
+		"Errors":     errsToStrings(errs),
+		"ConfigPath": s.configPath,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := layoutTmpl.Execute(w, data); err != nil {
+		fmt.Printf("[webui] layout execute: %v\n", err)
+	}
+}
+
+// renderInner renders one inner template (e.g. overview.html) to a string
+// suitable for {{.Body}} substitution in layout.html.
+func renderInner(name string, data any) template.HTML {
+	t, err := template.ParseFS(assets, "templates/"+name)
+	if err != nil {
+		return template.HTML(fmt.Sprintf("<pre>template parse %s: %v</pre>", name, err))
+	}
+	var b strings.Builder
+	if err := t.Execute(&b, data); err != nil {
+		return template.HTML(fmt.Sprintf("<pre>template execute %s: %v</pre>", name, err))
+	}
+	return template.HTML(b.String())
+}
+
+func errsToStrings(errs []error) []string {
+	out := make([]string, 0, len(errs))
+	for _, e := range errs {
+		out = append(out, e.Error())
+	}
+	return out
+}
+
+func randomToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "fallback-token"
+	}
+	return hex.EncodeToString(b[:])
+}
+
+func openBrowser(url string) {
+	var cmd string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+	case "windows":
+		cmd = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler"}
+	default:
+		cmd = "xdg-open"
+	}
+	args = append(args, url)
+	_ = exec.Command(cmd, args...).Start()
+}
+
+// --- view-model builders ---
+
+func overviewData(configPath string, ext *configstore.AndorraExt) map[string]any {
+	// Read just the upstream provider/model fields from the same file.
+	var upstream struct {
+		Provider string          `json:"provider"`
+		Model    string          `json:"model"`
+		Llm      json.RawMessage `json:"llm"`
+	}
+	raw, _ := readRaw(configPath)
+	if pBytes, ok := raw["provider"]; ok {
+		_ = json.Unmarshal(pBytes, &upstream.Provider)
+	}
+	if mBytes, ok := raw["model"]; ok {
+		_ = json.Unmarshal(mBytes, &upstream.Model)
+	}
+
+	enabled := false
+	scannerCount := 0
+	arbiterModel := ""
+	if ext != nil && ext.Ensemble != nil {
+		enabled = ext.Ensemble.Enabled
+		scannerCount = len(ext.Ensemble.Scanners)
+		if ext.Ensemble.Arbiter != nil {
+			arbiterModel = ext.Ensemble.Arbiter.Model
+		}
+	}
+	return map[string]any{
+		"Provider":        upstream.Provider,
+		"Model":           upstream.Model,
+		"EnsembleEnabled": enabled,
+		"ScannerCount":    scannerCount,
+		"ArbiterModel":    arbiterModel,
+	}
+}
+
+func ensembleData(ext *configstore.AndorraExt, token string) map[string]any {
+	e := ext.Ensemble
+	if e == nil {
+		e = &configstore.EnsembleConfig{}
+	}
+	a := e.Arbiter
+	if a == nil {
+		a = &configstore.ArbiterSpec{}
+	}
+	d := e.Dedup
+	if d == nil {
+		d = &configstore.DedupConfig{}
+	}
+	o := e.Output
+	if o == nil {
+		o = &configstore.EnsembleOutput{}
+	}
+	scanners := e.Scanners
+	if len(scanners) == 0 {
+		scanners = []configstore.ScannerSpec{{}}
+	}
+	return map[string]any{
+		"E":                 e,
+		"Scanners":          scanners,
+		"A":                 a,
+		"D":                 d,
+		"O":                 o,
+		"OutputVerdictsCSV": strings.Join(o.DefaultVerdicts, ", "),
+		"CSRFToken":         token,
+	}
+}
+
+func buildExtFromForm(r *http.Request) *configstore.AndorraExt {
+	ext := &configstore.AndorraExt{
+		Ensemble: &configstore.EnsembleConfig{
+			Enabled: r.PostFormValue("enabled") == "true",
+		},
+	}
+	// Scanners
+	for i := 0; ; i++ {
+		name := strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_name_%d", i)))
+		provider := strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_provider_%d", i)))
+		_, present := r.PostForm[fmt.Sprintf("scanner_name_%d", i)]
+		if !present {
+			break
+		}
+		if name == "" && provider == "" {
+			continue
+		}
+		s := configstore.ScannerSpec{
+			Name:     name,
+			Provider: provider,
+			Model:    strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_model_%d", i))),
+		}
+		if w := strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_weight_%d", i))); w != "" {
+			if f, err := strconv.ParseFloat(w, 64); err == nil {
+				s.Weight = f
+			}
+		}
+		ext.Ensemble.Scanners = append(ext.Ensemble.Scanners, s)
+	}
+	// Arbiter
+	arb := &configstore.ArbiterSpec{
+		Provider: strings.TrimSpace(r.PostFormValue("arbiter_provider")),
+		Model:    strings.TrimSpace(r.PostFormValue("arbiter_model")),
+		Mode:     strings.TrimSpace(r.PostFormValue("arbiter_mode")),
+	}
+	if arb.Provider != "" || arb.Model != "" || arb.Mode != "" {
+		ext.Ensemble.Arbiter = arb
+	}
+	// Dedup
+	d := &configstore.DedupConfig{}
+	if v := r.PostFormValue("dedup_line_overlap"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			d.LineOverlapMinRatio = f
+		}
+	}
+	if v := r.PostFormValue("dedup_title_sim"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			d.TitleSimilarityMin = f
+		}
+	}
+	if d.LineOverlapMinRatio != 0 || d.TitleSimilarityMin != 0 {
+		ext.Ensemble.Dedup = d
+	}
+	// Output
+	o := &configstore.EnsembleOutput{
+		ShowProvenance: r.PostFormValue("output_show_provenance") == "true",
+	}
+	for _, v := range strings.Split(r.PostFormValue("output_default_verdicts"), ",") {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			o.DefaultVerdicts = append(o.DefaultVerdicts, v)
+		}
+	}
+	if o.ShowProvenance || len(o.DefaultVerdicts) > 0 {
+		ext.Ensemble.Output = o
+	}
+	return ext
+}
+
+// readRaw is a small helper that loads the file as a top-level map of raw
+// messages, mirroring configstore.loadRaw without exporting it.
+func readRaw(path string) (map[string]json.RawMessage, error) {
+	data, err := readFile(path)
+	if err != nil {
+		return map[string]json.RawMessage{}, err
+	}
+	if len(data) == 0 {
+		return map[string]json.RawMessage{}, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		raw = map[string]json.RawMessage{}
+	}
+	return raw, nil
+}
+
+func readFile(path string) ([]byte, error) {
+	f, err := openReadable(path)
+	if err != nil {
+		if errors.Is(err, errMissing) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	var buf []byte
+	chunk := make([]byte, 4096)
+	for {
+		n, err := f.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+	return buf, nil
+}

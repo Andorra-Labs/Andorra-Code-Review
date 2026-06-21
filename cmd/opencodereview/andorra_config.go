@@ -105,9 +105,13 @@ telemetry, ensemble, ...) and only sanitizes secret-shaped fields under
 providers / custom_providers / llm.`)
 }
 
-// runConfigUI dispatches to the local web config UI implementation in
-// andorra_config_ui.go (Phases 7+8). Phase 6 leaves this as a stub so the
-// dispatch contract is in place; Phase 7 fills in the real implementation.
+// runConfigUI dispatches to the local web config UI. The implementation is
+// installed by an init() in andorra_config_ui.go which assigns configUIImpl;
+// before that init runs (or in a build without that file) the function falls
+// back to a clear error.
 func runConfigUI(args []string) error {
-	return fmt.Errorf("config ui: not yet implemented in this build")
+	if configUIImpl == nil {
+		return fmt.Errorf("config ui: not available in this build")
+	}
+	return configUIImpl(args)
 }

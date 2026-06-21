@@ -1,0 +1,19 @@
+<section>
+  <h2>Status</h2>
+  <dl class="status">
+    <dt>Active provider</dt>           <dd>{{or .Provider "<em>(not set)</em>"}}</dd>
+    <dt>Active model</dt>              <dd>{{or .Model "<em>(not set)</em>"}}</dd>
+    <dt>Ensemble enabled</dt>          <dd>{{.EnsembleEnabled}}</dd>
+    <dt>Configured scanners</dt>       <dd>{{.ScannerCount}}</dd>
+    <dt>Configured arbiter</dt>        <dd>{{or .ArbiterModel "<em>(none)</em>"}}</dd>
+  </dl>
+  <p>
+    <a class="button" href="/ensemble">Edit ensemble settings</a>
+    <a class="button secondary" href="/export">Export config for CI</a>
+  </p>
+  <p class="hint">
+    Use the CLI for provider credentials and basic settings:
+    <code>ocr config provider</code>, <code>ocr config set ...</code>.
+    This UI focuses on the ensemble block which is the fork's unique surface.
+  </p>
+</section>
