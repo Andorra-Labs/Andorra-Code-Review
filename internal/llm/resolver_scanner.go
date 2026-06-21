@@ -4,7 +4,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 )
+
+// envPlaceholderRe matches ${env:NAME} where NAME is [A-Z_][A-Z0-9_]*.
+var envPlaceholderRe = regexp.MustCompile(`\$\{env:([A-Z_][A-Z0-9_]*)\}`)
+
+// ExpandEnvPlaceholders rewrites every ${env:NAME} occurrence in s with the
+// value of the named environment variable. Unset variables become "" and
+// produce an error so callers can fail early rather than silently using empty
+// credentials.
+func ExpandEnvPlaceholders(s string) (string, error) {
+	if !envPlaceholderRe.MatchString(s) {
+		return s, nil
+	}
+	var missing []string
+	out := envPlaceholderRe.ReplaceAllStringFunc(s, func(match string) string {
+		name := envPlaceholderRe.FindStringSubmatch(match)[1]
+		v, ok := os.LookupEnv(name)
+		if !ok || v == "" {
+			missing = append(missing, name)
+		}
+		return v
+	})
+	if len(missing) > 0 {
+		return "", fmt.Errorf("env-var placeholder(s) unset: %v", missing)
+	}
+	return out, nil
+}
 
 // ResolveProvider resolves a provider+model combination directly, regardless
 // of what `cfg.Provider` / `cfg.Model` say in the config file. It is meant for
@@ -36,5 +63,10 @@ func ResolveProvider(configPath, providerName, modelName string) (ResolvedEndpoi
 	}
 	ep.Source = "scanner:" + providerName
 	ep.Model = stripModelSuffix(ep.Model)
+	expanded, err := ExpandEnvPlaceholders(ep.Token)
+	if err != nil {
+		return ResolvedEndpoint{}, fmt.Errorf("scanner %q: %w", providerName, err)
+	}
+	ep.Token = expanded
 	return ep, nil
 }

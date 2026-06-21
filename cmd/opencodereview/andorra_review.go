@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ type ensembleOptions struct {
 	showProvenance bool
 	showRejected   bool
 	debugTrace     string
+	configPath     string // --config <path>
 }
 
 // splitEnsembleArgs separates ensemble-only flags from the rest. Returned
@@ -85,6 +87,8 @@ func splitEnsembleArgs(args []string) (ensembleOptions, []string) {
 			opts.showRejected = true
 		case "--debug-trace":
 			opts.debugTrace = consume()
+		case "--config":
+			opts.configPath = consume()
 		default:
 			rest = append(rest, arg)
 		}
@@ -128,7 +132,7 @@ func shouldRunEnsemble(args []string) bool {
 	if eopts.forceEnsemble {
 		return true
 	}
-	path, err := configstore.DefaultPath()
+	path, err := resolveAndorraConfigPath(eopts.configPath)
 	if err != nil {
 		return false
 	}
@@ -137,6 +141,23 @@ func shouldRunEnsemble(args []string) bool {
 		return false
 	}
 	return ext.Ensemble.Enabled && len(ext.Ensemble.Scanners) >= 2 && ext.Ensemble.Arbiter != nil
+}
+
+// resolveAndorraConfigPath implements the fork's config lookup order:
+//   explicit --config flag → $PWD/.ocr/config.json → ~/.opencodereview/config.json
+// Repo-local beats user-level so CI deterministically uses the committed file.
+func resolveAndorraConfigPath(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	repoLocal := ".ocr/config.json"
+	if cwd, err := os.Getwd(); err == nil {
+		repoLocal = filepath.Join(cwd, ".ocr", "config.json")
+	}
+	if _, err := os.Stat(repoLocal); err == nil {
+		return repoLocal, nil
+	}
+	return configstore.DefaultPath()
 }
 
 // runAndorraReview executes the ensemble review pipeline. Mirrors the high-level
@@ -198,7 +219,7 @@ func runAndorraReview(args []string) error {
 	planToolDefs := agent.BuildToolDefs(toolEntries, true)
 	mainToolDefs := agent.BuildToolDefs(toolEntries, false)
 
-	cfgPath, err := defaultConfigPath()
+	cfgPath, err := resolveAndorraConfigPath(eopts.configPath)
 	if err != nil {
 		return err
 	}
