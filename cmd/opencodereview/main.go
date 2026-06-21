@@ -45,6 +45,9 @@ func dispatch() error {
 		printVersion()
 		return nil
 	case "review", "r":
+		if shouldRunEnsemble(args[1:]) {
+			return runAndorraReview(args[1:])
+		}
 		return runReview(args[1:])
 	case "config":
 		return runConfig(args[1:])

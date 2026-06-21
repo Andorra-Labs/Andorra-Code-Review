@@ -119,6 +119,12 @@ type Args struct {
 	// Session is an optional session history instance for collecting conversation records.
 	// When nil, a default one is created automatically with git branch auto-detected from repoDir.
 	Session *session.SessionHistory
+
+	// PrecomputedDiffs lets a caller supply already-parsed diffs to avoid
+	// re-running `git diff` per Agent. When non-nil, loadDiffs uses these
+	// directly and skips the diff.Provider entirely. Used by the fork's
+	// ensemble orchestrator so N scanners share one parse.
+	PrecomputedDiffs []model.Diff
 }
 
 // AgentWarning describes a non-fatal warning recorded during review.
@@ -365,6 +371,15 @@ func (a *Agent) recordWarning(warningType, file, message string) {
 
 // loadDiffs populates the diff-related fields.
 func (a *Agent) loadDiffs(ctx context.Context) error {
+	if a.args.PrecomputedDiffs != nil {
+		a.diffs = a.args.PrecomputedDiffs
+		for i := range a.diffs {
+			d := &a.diffs[i]
+			a.totalInsertions += d.Insertions
+			a.totalDeletions += d.Deletions
+		}
+		return nil
+	}
 	var provider *diff.Provider
 
 	switch {
