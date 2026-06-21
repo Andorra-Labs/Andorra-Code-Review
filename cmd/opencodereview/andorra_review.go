@@ -256,7 +256,12 @@ func runAndorraReview(args []string) error {
 	if eopts.arbiterOverride != "" {
 		arbiterModel = eopts.arbiterOverride
 	}
-	arbiterEp, err := llm.ResolveProvider(cfgPath, ext.Ensemble.Arbiter.Provider, arbiterModel)
+	var arbiterEp llm.ResolvedEndpoint
+	if ext.Ensemble.Arbiter.Bedrock {
+		arbiterEp, err = llm.ResolveBedrock("arbiter", arbiterModel)
+	} else {
+		arbiterEp, err = llm.ResolveProvider(cfgPath, ext.Ensemble.Arbiter.Provider, arbiterModel)
+	}
 	if err != nil {
 		return fmt.Errorf("resolve arbiter: %w", err)
 	}
@@ -281,7 +286,7 @@ func runAndorraReview(args []string) error {
 		perScannerConcurrency = 2
 	}
 
-	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, error) {
+	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
 		client := llm.NewLLMClient(sep.Endpoint)
 		collector := tool.NewCommentCollector()
 		fr := &tool.FileReader{
@@ -314,12 +319,18 @@ func runAndorraReview(args []string) error {
 			PrecomputedDiffs:      parsedDiffs,
 		})
 		comments, err := ag.Run(ctx)
+		usage := finding.TokenUsage{
+			InputTokens:      ag.TotalInputTokens(),
+			OutputTokens:     ag.TotalOutputTokens(),
+			CacheReadTokens:  ag.TotalCacheReadTokens(),
+			CacheWriteTokens: ag.TotalCacheWriteTokens(),
+		}
 		if err != nil {
-			return comments, err
+			return comments, usage, err
 		}
 		// Resolve line numbers per-scanner so the LlmComment ranges are valid.
 		comments = diff.ResolveLineNumbers(comments, ag.Diffs())
-		return comments, nil
+		return comments, usage, nil
 	}
 
 	orch := &ensemble.Orchestrator{
@@ -376,7 +387,7 @@ func runAndorraReview(args []string) error {
 		telemetry.AnyToAttr("group.count", len(groups)),
 	)
 	arbiterClient := llm.NewLLMClient(arbiterEp)
-	finals := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
+	finals, arbiterUsage := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
 	verdictCounts := map[finding.Verdict]int{}
 	for _, f := range finals {
 		verdictCounts[f.Verdict]++
@@ -399,13 +410,14 @@ func runAndorraReview(args []string) error {
 		unsilence()
 		unsilence = nil
 	}
+	tokenRows := buildTokenRows(result, ext.Ensemble.Arbiter, arbiterUsage)
+	EnrichTokenRowsFromSpecs(tokenRows, ext.Ensemble.Scanners)
 	if opts.outputFormat == "json" {
-		return outputEnsembleJSON(comments, result, finals, duration)
+		return outputEnsembleJSON(comments, result, finals, arbiterUsage, tokenRows, duration)
 	}
-	if opts.outputFormat != "json" {
-		fmt.Fprintln(os.Stderr, ensembleSummary(result, finals))
-	}
+	fmt.Fprintln(os.Stderr, ensembleSummary(result, finals))
 	outputTextWithWarnings(comments, nil)
+	fmt.Fprintln(os.Stderr, renderTokenGrid(tokenRows))
 	if eopts.debugTrace != "" {
 		if err := writeDebugTrace(eopts.debugTrace, result, finals); err != nil {
 			fmt.Fprintf(os.Stderr, "[ocr] failed to write debug trace: %v\n", err)
@@ -430,7 +442,8 @@ func loadDiffsOnce(ctx context.Context, repoDir string, opts reviewOptions, runn
 }
 
 // resolveScanners turns ScannerSpec entries into ScannerEndpoint with resolved
-// LLM endpoints, optionally filtered by the --scanners CLI subset.
+// LLM endpoints, optionally filtered by the --scanners CLI subset. Bedrock
+// scanners route through llm.ResolveBedrock instead of the per-provider path.
 func resolveScanners(cfgPath string, specs []configstore.ScannerSpec, subset []string) ([]ensemble.ScannerEndpoint, error) {
 	subsetSet := map[string]struct{}{}
 	for _, n := range subset {
@@ -446,7 +459,13 @@ func resolveScanners(cfgPath string, specs []configstore.ScannerSpec, subset []s
 				continue
 			}
 		}
-		ep, err := llm.ResolveProvider(cfgPath, s.Provider, s.Model)
+		var ep llm.ResolvedEndpoint
+		var err error
+		if s.Bedrock {
+			ep, err = llm.ResolveBedrock(s.Name, s.Model)
+		} else {
+			ep, err = llm.ResolveProvider(cfgPath, s.Provider, s.Model)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("scanner %q: %w", s.Name, err)
 		}

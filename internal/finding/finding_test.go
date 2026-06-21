@@ -7,6 +7,23 @@ import (
 	"github.com/open-code-review/open-code-review/internal/model"
 )
 
+func TestTokenUsageTotal(t *testing.T) {
+	u := TokenUsage{InputTokens: 100, OutputTokens: 25, CacheReadTokens: 50}
+	if u.Total() != 125 {
+		t.Errorf("Total()=%d, want 125 (cache tokens should not be added)", u.Total())
+	}
+}
+
+func TestTokenUsageAdd(t *testing.T) {
+	a := TokenUsage{InputTokens: 100, OutputTokens: 10, CacheReadTokens: 5, CacheWriteTokens: 2}
+	b := TokenUsage{InputTokens: 200, OutputTokens: 20, CacheReadTokens: 8, CacheWriteTokens: 3}
+	got := a.Add(b)
+	want := TokenUsage{InputTokens: 300, OutputTokens: 30, CacheReadTokens: 13, CacheWriteTokens: 5}
+	if got != want {
+		t.Errorf("Add()=%+v, want %+v", got, want)
+	}
+}
+
 func TestParseVerdict(t *testing.T) {
 	if ParseVerdict("accepted_bug") != VerdictAccepted {
 		t.Error("accepted_bug parse failed")

@@ -37,24 +37,44 @@ type EnsembleConfig struct {
 
 // ScannerSpec is one entry in the scanner ensemble. Provider must match either
 // a preset provider name or a key under upstream's providers / custom_providers.
+//
+// Bedrock and Local are mutually-exclusive routing flags:
+//   - Bedrock=true: credentials/URL come from AWS env vars (OCR_BEDROCK_API_KEY,
+//     OCR_BEDROCK_REGION) instead of the provider entry. Bedrock model IDs are
+//     used verbatim (e.g. "anthropic.claude-opus-4-...-v1:0").
+//   - Local=true: cost column renders "(local)" regardless of CostPerM*USD.
+//
+// CostPerMInputUSD / CostPerMOutputUSD are dollars-per-million-tokens rates.
+// When non-zero, the output renderer multiplies them by reported usage to
+// display a pro-rata cost in the summary grid. They apply to any model, not
+// just Bedrock; the Bedrock toggle just surfaces them in the UI by default.
 type ScannerSpec struct {
-	Name        string   `json:"name"`
-	Provider    string   `json:"provider"`
-	Model       string   `json:"model,omitempty"`
-	Weight      float64  `json:"weight,omitempty"`
-	Temperature *float64 `json:"temperature,omitempty"`
-	MaxTokens   int      `json:"max_tokens,omitempty"`
-	PromptTag   string   `json:"prompt_tag,omitempty"`
-	Enabled     *bool    `json:"enabled,omitempty"`
+	Name              string   `json:"name"`
+	Provider          string   `json:"provider"`
+	Model             string   `json:"model,omitempty"`
+	Weight            float64  `json:"weight,omitempty"`
+	Temperature       *float64 `json:"temperature,omitempty"`
+	MaxTokens         int      `json:"max_tokens,omitempty"`
+	PromptTag         string   `json:"prompt_tag,omitempty"`
+	Enabled           *bool    `json:"enabled,omitempty"`
+	Bedrock           bool     `json:"bedrock,omitempty"`
+	Local             bool     `json:"local,omitempty"`
+	CostPerMInputUSD  float64  `json:"cost_per_m_input_usd,omitempty"`
+	CostPerMOutputUSD float64  `json:"cost_per_m_output_usd,omitempty"`
 }
 
 // ArbiterSpec configures the arbiter pass that classifies grouped findings.
+// Bedrock/Local/cost fields work the same as on ScannerSpec.
 type ArbiterSpec struct {
-	Provider    string   `json:"provider"`
-	Model       string   `json:"model,omitempty"`
-	Temperature *float64 `json:"temperature,omitempty"`
-	MaxTokens   int      `json:"max_tokens,omitempty"`
-	Mode        string   `json:"mode,omitempty"`
+	Provider          string   `json:"provider"`
+	Model             string   `json:"model,omitempty"`
+	Temperature       *float64 `json:"temperature,omitempty"`
+	MaxTokens         int      `json:"max_tokens,omitempty"`
+	Mode              string   `json:"mode,omitempty"`
+	Bedrock           bool     `json:"bedrock,omitempty"`
+	Local             bool     `json:"local,omitempty"`
+	CostPerMInputUSD  float64  `json:"cost_per_m_input_usd,omitempty"`
+	CostPerMOutputUSD float64  `json:"cost_per_m_output_usd,omitempty"`
 }
 
 // DedupConfig tunes the pre-arbiter grouping heuristic.

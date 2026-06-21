@@ -48,35 +48,40 @@ func FromConfigStore(spec configstore.ArbiterSpec, resolvedModel string) Config 
 }
 
 // Decide runs the arbiter against the given groups, returning one FinalFinding
-// per input Finding. diffsByPath provides the per-file diff context the
+// per input Finding plus the aggregate token usage across every LLM call this
+// arbiter run made. diffsByPath provides the per-file diff context the
 // arbiter sees as evidence; missing entries mean the arbiter sees only the
 // group payloads for that file.
 //
 // Per-file mode batches all groups for one file into one LLM call. Per-group
 // mode emits one call per group. On LLM failure or malformed response, every
 // affected group is marked VerdictUncertain with VerdictReason populated; the
-// function still returns nil error so the caller can render degraded output.
-func Decide(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diffsByPath map[string]string) []finding.FinalFinding {
+// function still returns the partial findings + accumulated usage so the
+// caller can render degraded output.
+func Decide(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diffsByPath map[string]string) ([]finding.FinalFinding, finding.TokenUsage) {
 	if len(groups) == 0 {
-		return nil
+		return nil, finding.TokenUsage{}
 	}
 	out := make([]finding.FinalFinding, 0, len(groups))
+	var totalUsage finding.TokenUsage
 
 	switch cfg.Mode {
 	case "per_group":
 		for _, g := range groups {
-			verdict, reason, conf := callArbiter(ctx, client, cfg, []finding.Finding{g}, diffsByPath[g.Path])
+			verdict, reason, conf, usage := callArbiter(ctx, client, cfg, []finding.Finding{g}, diffsByPath[g.Path])
+			totalUsage = totalUsage.Add(usage)
 			out = append(out, applyVerdicts([]finding.Finding{g}, verdict, reason, conf, cfg.Model)...)
 		}
 	default: // per_file
 		byPath := groupByPath(groups)
 		for _, path := range sortedPaths(byPath) {
 			pg := byPath[path]
-			verdict, reason, conf := callArbiter(ctx, client, cfg, pg, diffsByPath[path])
+			verdict, reason, conf, usage := callArbiter(ctx, client, cfg, pg, diffsByPath[path])
+			totalUsage = totalUsage.Add(usage)
 			out = append(out, applyVerdicts(pg, verdict, reason, conf, cfg.Model)...)
 		}
 	}
-	return out
+	return out, totalUsage
 }
 
 func groupByPath(groups []finding.Finding) map[string][]finding.Finding {
@@ -103,16 +108,18 @@ type rawVerdict struct {
 	Confidence float64 `json:"confidence"`
 }
 
-// callArbiter returns three maps keyed by group_id: verdict, reason, confidence.
-// Empty maps signal failure; applyVerdicts then assigns VerdictUncertain.
-func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diff string) (map[string]finding.Verdict, map[string]string, map[string]float64) {
+// callArbiter returns the per-group verdict/reason/confidence maps plus the
+// token usage reported by the LLM for this single call. Empty maps signal
+// failure; applyVerdicts then assigns VerdictUncertain.
+func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diff string) (map[string]finding.Verdict, map[string]string, map[string]float64, finding.TokenUsage) {
 	verdicts := map[string]finding.Verdict{}
 	reasons := map[string]string{}
 	confs := map[string]float64{}
+	var usage finding.TokenUsage
 
 	prompt, err := buildPrompt(groups, diff)
 	if err != nil {
-		return verdicts, reasons, confs
+		return verdicts, reasons, confs, usage
 	}
 
 	systemPrompt := cfg.SystemPrompt
@@ -133,11 +140,19 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 	}
 	resp, err := client.CompletionsWithCtx(ctx, req)
 	if err != nil || resp == nil {
-		return verdicts, reasons, confs
+		return verdicts, reasons, confs, usage
+	}
+	if resp.Usage != nil {
+		usage = finding.TokenUsage{
+			InputTokens:      resp.Usage.PromptTokens,
+			OutputTokens:     resp.Usage.CompletionTokens,
+			CacheReadTokens:  resp.Usage.CacheReadTokens,
+			CacheWriteTokens: resp.Usage.CacheWriteTokens,
+		}
 	}
 	calls := resp.ToolCalls()
 	if len(calls) == 0 {
-		return verdicts, reasons, confs
+		return verdicts, reasons, confs, usage
 	}
 	for _, call := range calls {
 		if call.Function.Name != "arbiter_verdict" {
@@ -163,7 +178,7 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 			}
 		}
 	}
-	return verdicts, reasons, confs
+	return verdicts, reasons, confs, usage
 }
 
 func applyVerdicts(groups []finding.Finding, verdicts map[string]finding.Verdict, reasons map[string]string, confs map[string]float64, model string) []finding.FinalFinding {

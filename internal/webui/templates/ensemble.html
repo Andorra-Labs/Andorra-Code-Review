@@ -16,7 +16,14 @@
       <p class="hint">Each scanner must point at a provider configured in your upstream config (presets like <code>anthropic</code>, <code>openai</code> work out of the box).</p>
       <table id="scanners-table">
         <thead>
-          <tr><th>Name</th><th>Provider</th><th>Model</th><th>Weight</th><th></th></tr>
+          <tr>
+            <th>Name</th><th>Provider</th><th>Model</th>
+            <th title="AWS Bedrock toggle: uses OCR_BEDROCK_API_KEY / OCR_BEDROCK_REGION env vars instead of provider api_key">Bedrock</th>
+            <th title="Local model: cost column will show (local) instead of $">Local</th>
+            <th title="Cost per 1M input tokens (USD)">$/1M in</th>
+            <th title="Cost per 1M output tokens (USD)">$/1M out</th>
+            <th></th>
+          </tr>
         </thead>
         <tbody>
           {{range $i, $s := .Scanners}}
@@ -24,7 +31,10 @@
             <td><input name="scanner_name_{{$i}}" value="{{$s.Name}}" required></td>
             <td><input name="scanner_provider_{{$i}}" value="{{$s.Provider}}" required></td>
             <td><input name="scanner_model_{{$i}}" value="{{$s.Model}}"></td>
-            <td><input name="scanner_weight_{{$i}}" value="{{$s.Weight}}" type="number" step="0.1" min="0" style="width:5em"></td>
+            <td><input type="checkbox" name="scanner_bedrock_{{$i}}" value="true" {{if $s.Bedrock}}checked{{end}}></td>
+            <td><input type="checkbox" name="scanner_local_{{$i}}" value="true" {{if $s.Local}}checked{{end}}></td>
+            <td><input name="scanner_cost_in_{{$i}}" value="{{$s.CostPerMInputUSD}}" type="number" step="0.0001" min="0" style="width:6em"></td>
+            <td><input name="scanner_cost_out_{{$i}}" value="{{$s.CostPerMOutputUSD}}" type="number" step="0.0001" min="0" style="width:6em"></td>
             <td><button type="button" class="remove-row">×</button></td>
           </tr>
           {{end}}
@@ -44,6 +54,10 @@
           <option value="per_group" {{if eq .A.Mode "per_group"}}selected{{end}}>per_group</option>
         </select>
       </label>
+      <label><input type="checkbox" name="arbiter_bedrock" value="true" {{if .A.Bedrock}}checked{{end}}> Amazon Bedrock (uses OCR_BEDROCK_* env vars)</label>
+      <label><input type="checkbox" name="arbiter_local" value="true" {{if .A.Local}}checked{{end}}> Local model (cost shown as "(local)")</label>
+      <label>Cost per 1M input tokens ($) <input name="arbiter_cost_in" value="{{.A.CostPerMInputUSD}}" type="number" step="0.0001" min="0" style="width:8em"></label>
+      <label>Cost per 1M output tokens ($) <input name="arbiter_cost_out" value="{{.A.CostPerMOutputUSD}}" type="number" step="0.0001" min="0" style="width:8em"></label>
     </fieldset>
 
     <fieldset>

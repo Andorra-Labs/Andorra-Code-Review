@@ -42,16 +42,28 @@ func Validate(ext *AndorraExt) []error {
 		if s.MaxTokens < 0 {
 			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): max_tokens must be >= 0 (got %d)", i, s.Name, s.MaxTokens))
 		}
+		if s.Bedrock && s.Local {
+			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): bedrock and local are mutually exclusive", i, s.Name))
+		}
+		if s.CostPerMInputUSD < 0 || s.CostPerMOutputUSD < 0 {
+			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): cost rates must be >= 0", i, s.Name))
+		}
 	}
 	if e.Arbiter != nil {
-		if e.Arbiter.Provider == "" {
-			errs = append(errs, fmt.Errorf("ensemble.arbiter.provider is required"))
+		if e.Arbiter.Provider == "" && !e.Arbiter.Bedrock {
+			errs = append(errs, fmt.Errorf("ensemble.arbiter.provider is required (or set ensemble.arbiter.bedrock=true)"))
 		}
 		if !validArbiterMode(e.Arbiter.Mode) {
 			errs = append(errs, fmt.Errorf("ensemble.arbiter.mode %q is invalid (allowed: %v)", e.Arbiter.Mode, ValidArbiterModes[1:]))
 		}
 		if e.Arbiter.MaxTokens < 0 {
 			errs = append(errs, fmt.Errorf("ensemble.arbiter.max_tokens must be >= 0 (got %d)", e.Arbiter.MaxTokens))
+		}
+		if e.Arbiter.Bedrock && e.Arbiter.Local {
+			errs = append(errs, fmt.Errorf("ensemble.arbiter: bedrock and local are mutually exclusive"))
+		}
+		if e.Arbiter.CostPerMInputUSD < 0 || e.Arbiter.CostPerMOutputUSD < 0 {
+			errs = append(errs, fmt.Errorf("ensemble.arbiter: cost rates must be >= 0"))
 		}
 	}
 	if e.Dedup != nil {

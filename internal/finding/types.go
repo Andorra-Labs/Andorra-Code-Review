@@ -86,3 +86,28 @@ type RenderOptions struct {
 	ShowProvenance bool
 	ShowVerdict    bool
 }
+
+// TokenUsage captures the per-stage token spend for the ensemble pipeline.
+// Both scanners and the arbiter report into this shape so the final summary
+// can aggregate uniformly. Dedup and the verdict filter run no LLM calls and
+// therefore never contribute to these counters.
+type TokenUsage struct {
+	InputTokens      int64 `json:"input_tokens"`
+	OutputTokens     int64 `json:"output_tokens"`
+	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+}
+
+// Total returns InputTokens + OutputTokens. Cache tokens are excluded because
+// for Anthropic they are already subsumed in InputTokens.
+func (u TokenUsage) Total() int64 { return u.InputTokens + u.OutputTokens }
+
+// Add returns the element-wise sum of two TokenUsage values.
+func (u TokenUsage) Add(o TokenUsage) TokenUsage {
+	return TokenUsage{
+		InputTokens:      u.InputTokens + o.InputTokens,
+		OutputTokens:     u.OutputTokens + o.OutputTokens,
+		CacheReadTokens:  u.CacheReadTokens + o.CacheReadTokens,
+		CacheWriteTokens: u.CacheWriteTokens + o.CacheWriteTokens,
+	}
+}

@@ -34,9 +34,10 @@ type ArbiterEndpoint struct {
 }
 
 // RunScannerFunc executes one scanner against the shared review target and
-// returns its raw comments. Errors are scanner-scoped — the orchestrator
-// records them but does not abort the whole run on a single failure.
-type RunScannerFunc func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error)
+// returns its raw comments plus the token spend for that scanner's run.
+// Errors are scanner-scoped — the orchestrator records them but does not
+// abort the whole run on a single failure.
+type RunScannerFunc func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error)
 
 // Orchestrator owns the scanner fan-out. Construct one per review run.
 type Orchestrator struct {
@@ -55,6 +56,7 @@ type ScannerResult struct {
 	Err      string
 	Findings int
 	Duration time.Duration
+	Tokens   finding.TokenUsage
 }
 
 // Result is the orchestrator's full output for a review run.
@@ -98,7 +100,7 @@ func (o *Orchestrator) Execute(ctx context.Context) (Result, error) {
 			defer func() { <-sem }()
 
 			start := time.Now()
-			comments, err := o.Run(ctx, sep)
+			comments, tokens, err := o.Run(ctx, sep)
 			dur := time.Since(start)
 
 			src := finding.Source{
@@ -115,6 +117,7 @@ func (o *Orchestrator) Execute(ctx context.Context) (Result, error) {
 				Model:    src.Model,
 				Findings: len(raws),
 				Duration: dur,
+				Tokens:   tokens,
 			}
 			switch {
 			case err == nil:

@@ -79,7 +79,7 @@ func TestDecideSuccessfulPerFile(t *testing.T) {
 			{GroupID: "g-1", Verdict: "rejected_fp", Reason: "constant condition", Confidence: 0.8},
 		}),
 	}
-	out := Decide(context.Background(), client, Config{Model: "claude-opus-4-8", Mode: "per_file"}, groups, nil)
+	out, _ := Decide(context.Background(), client, Config{Model: "claude-opus-4-8", Mode: "per_file"}, groups, nil)
 	if client.calls != 1 {
 		t.Errorf("calls=%d, want 1 for per_file with single path", client.calls)
 	}
@@ -113,7 +113,7 @@ func TestDecidePerFileBatchesByPath(t *testing.T) {
 			{GroupID: "g-2", Verdict: "accepted_bug"},
 		}),
 	}
-	Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil) //nolint:errcheck
 	if client.calls != 2 {
 		t.Errorf("calls=%d, want 2 (one per path)", client.calls)
 	}
@@ -128,7 +128,7 @@ func TestDecidePerGroupOneCallEach(t *testing.T) {
 	client := &fakeClient{
 		resp: mkResp([]rawVerdict{{GroupID: "g-0", Verdict: "accepted_bug"}}),
 	}
-	Decide(context.Background(), client, Config{Mode: "per_group"}, groups, nil)
+	Decide(context.Background(), client, Config{Mode: "per_group"}, groups, nil) //nolint:errcheck
 	if client.calls != 3 {
 		t.Errorf("calls=%d, want 3", client.calls)
 	}
@@ -145,7 +145,7 @@ func TestDecideMissingVerdictsBecomeUncertain(t *testing.T) {
 			// g-1 omitted
 		}),
 	}
-	out := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	out, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
 	if out[1].Verdict != finding.VerdictUncertain {
 		t.Errorf("g-1 verdict=%s", out[1].Verdict)
 	}
@@ -163,7 +163,7 @@ func TestDecideLLMErrorAllUncertain(t *testing.T) {
 		mkGroup("g-1", "b.go", "y", 1, 1),
 	}
 	client := &fakeClient{err: errors.New("rate limited")}
-	out := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	out, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
 	if len(out) != 2 {
 		t.Fatalf("len=%d", len(out))
 	}
@@ -190,7 +190,7 @@ func TestDecideMalformedToolCallAllUncertain(t *testing.T) {
 			}},
 		},
 	}
-	out := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	out, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
 	if out[0].Verdict != finding.VerdictUncertain {
 		t.Errorf("verdict=%s, want uncertain", out[0].Verdict)
 	}
@@ -198,9 +198,12 @@ func TestDecideMalformedToolCallAllUncertain(t *testing.T) {
 
 func TestDecideEmptyGroupsNoCall(t *testing.T) {
 	client := &fakeClient{}
-	out := Decide(context.Background(), client, Config{}, nil, nil)
+	out, usage := Decide(context.Background(), client, Config{}, nil, nil)
 	if out != nil {
 		t.Errorf("expected nil output, got %+v", out)
+	}
+	if (usage != finding.TokenUsage{}) {
+		t.Errorf("expected zero usage, got %+v", usage)
 	}
 	if client.calls != 0 {
 		t.Errorf("calls=%d, want 0", client.calls)
@@ -212,10 +215,44 @@ func TestDecideClampsConfidence(t *testing.T) {
 	client := &fakeClient{
 		resp: mkResp([]rawVerdict{{GroupID: "g-0", Verdict: "accepted_bug", Confidence: 2.5}}),
 	}
-	out := Decide(context.Background(), client, Config{}, groups, nil)
+	out, _ := Decide(context.Background(), client, Config{}, groups, nil)
 	if out[0].Confidence != 1.0 {
 		t.Errorf("confidence=%f, want 1.0", out[0].Confidence)
 	}
+}
+
+func TestDecideAccumulatesUsage(t *testing.T) {
+	groups := []finding.Finding{
+		mkGroup("g-0", "a.go", "x", 1, 1),
+		mkGroup("g-1", "b.go", "y", 5, 5),
+	}
+	client := &usageClient{usage: &llm.UsageInfo{PromptTokens: 100, CompletionTokens: 20, CacheReadTokens: 30}}
+	_, total := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	// per_file mode: one call per path (two paths) → usage is doubled
+	if total.InputTokens != 200 || total.OutputTokens != 40 || total.CacheReadTokens != 60 {
+		t.Errorf("usage=%+v, want 200/40/60", total)
+	}
+}
+
+// usageClient is a stub that returns a response with Usage populated.
+type usageClient struct {
+	usage *llm.UsageInfo
+}
+
+func (u *usageClient) CompletionsWithCtx(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{
+		Usage: u.usage,
+		Choices: []llm.Choice{{
+			Message: llm.ResponseMessage{
+				ToolCalls: []llm.ToolCall{{
+					Function: llm.FunctionCall{
+						Name:      "arbiter_verdict",
+						Arguments: `{"verdicts":[{"group_id":"g-0","verdict":"accepted_bug"},{"group_id":"g-1","verdict":"accepted_bug"}]}`,
+					},
+				}},
+			},
+		}},
+	}, nil
 }
 
 func TestFromConfigStoreDefaults(t *testing.T) {

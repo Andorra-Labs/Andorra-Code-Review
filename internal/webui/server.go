@@ -356,10 +356,22 @@ func buildExtFromForm(r *http.Request) *configstore.AndorraExt {
 			Name:     name,
 			Provider: provider,
 			Model:    strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_model_%d", i))),
+			Bedrock:  r.PostFormValue(fmt.Sprintf("scanner_bedrock_%d", i)) == "true",
+			Local:    r.PostFormValue(fmt.Sprintf("scanner_local_%d", i)) == "true",
 		}
 		if w := strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_weight_%d", i))); w != "" {
 			if f, err := strconv.ParseFloat(w, 64); err == nil {
 				s.Weight = f
+			}
+		}
+		if v := strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_cost_in_%d", i))); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+				s.CostPerMInputUSD = f
+			}
+		}
+		if v := strings.TrimSpace(r.PostFormValue(fmt.Sprintf("scanner_cost_out_%d", i))); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+				s.CostPerMOutputUSD = f
 			}
 		}
 		ext.Ensemble.Scanners = append(ext.Ensemble.Scanners, s)
@@ -369,8 +381,20 @@ func buildExtFromForm(r *http.Request) *configstore.AndorraExt {
 		Provider: strings.TrimSpace(r.PostFormValue("arbiter_provider")),
 		Model:    strings.TrimSpace(r.PostFormValue("arbiter_model")),
 		Mode:     strings.TrimSpace(r.PostFormValue("arbiter_mode")),
+		Bedrock:  r.PostFormValue("arbiter_bedrock") == "true",
+		Local:    r.PostFormValue("arbiter_local") == "true",
 	}
-	if arb.Provider != "" || arb.Model != "" || arb.Mode != "" {
+	if v := strings.TrimSpace(r.PostFormValue("arbiter_cost_in")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			arb.CostPerMInputUSD = f
+		}
+	}
+	if v := strings.TrimSpace(r.PostFormValue("arbiter_cost_out")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			arb.CostPerMOutputUSD = f
+		}
+	}
+	if arb.Provider != "" || arb.Model != "" || arb.Mode != "" || arb.Bedrock || arb.Local {
 		ext.Ensemble.Arbiter = arb
 	}
 	// Dedup

@@ -78,6 +78,34 @@ func Set(ext *AndorraExt, key, value string) error {
 		}
 		ensureArbiter(ext)
 		ext.Ensemble.Arbiter.MaxTokens = n
+	case "ensemble.arbiter.bedrock":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for ensemble.arbiter.bedrock: %w", err)
+		}
+		ensureArbiter(ext)
+		ext.Ensemble.Arbiter.Bedrock = b
+	case "ensemble.arbiter.local":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for ensemble.arbiter.local: %w", err)
+		}
+		ensureArbiter(ext)
+		ext.Ensemble.Arbiter.Local = b
+	case "ensemble.arbiter.cost_per_m_input_usd":
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil || f < 0 {
+			return fmt.Errorf("invalid non-negative float for ensemble.arbiter.cost_per_m_input_usd: %v", value)
+		}
+		ensureArbiter(ext)
+		ext.Ensemble.Arbiter.CostPerMInputUSD = f
+	case "ensemble.arbiter.cost_per_m_output_usd":
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil || f < 0 {
+			return fmt.Errorf("invalid non-negative float for ensemble.arbiter.cost_per_m_output_usd: %v", value)
+		}
+		ensureArbiter(ext)
+		ext.Ensemble.Arbiter.CostPerMOutputUSD = f
 	case "ensemble.dedup.line_overlap_min_ratio":
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil {

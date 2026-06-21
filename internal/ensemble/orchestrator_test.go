@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/open-code-review/open-code-review/internal/configstore"
+	"github.com/open-code-review/open-code-review/internal/finding"
 	"github.com/open-code-review/open-code-review/internal/llm"
 	"github.com/open-code-review/open-code-review/internal/model"
 )
@@ -33,8 +34,8 @@ func TestExecuteRequiresCallback(t *testing.T) {
 
 func TestExecuteNoScanners(t *testing.T) {
 	o := &Orchestrator{
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
-			return nil, nil
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
+			return nil, finding.TokenUsage{}, nil
 		},
 	}
 	if _, err := o.Execute(context.Background()); err == nil {
@@ -48,10 +49,10 @@ func TestExecuteAllSucceed(t *testing.T) {
 			mkScanner("opus", "anthropic", "claude-opus-4-7", nil),
 			mkScanner("gpt", "openai", "gpt-5.5", nil),
 		},
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
 			return []model.LlmComment{
 				{Path: "x.go", Content: sep.Spec.Name + " finding"},
-			}, nil
+			}, finding.TokenUsage{InputTokens: 10, OutputTokens: 2}, nil
 		},
 	}
 	res, err := o.Execute(context.Background())
@@ -68,6 +69,9 @@ func TestExecuteAllSucceed(t *testing.T) {
 		if sr.Findings != 1 {
 			t.Errorf("scanner %s findings=%d, want 1", sr.Name, sr.Findings)
 		}
+		if sr.Tokens.InputTokens != 10 || sr.Tokens.OutputTokens != 2 {
+			t.Errorf("scanner %s tokens=%+v, want input=10 output=2", sr.Name, sr.Tokens)
+		}
 	}
 }
 
@@ -76,8 +80,8 @@ func TestExecuteTagsProvenance(t *testing.T) {
 		Scanners: []ScannerEndpoint{
 			mkScanner("opus", "anthropic", "claude-opus-4-7", nil),
 		},
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
-			return []model.LlmComment{{Path: "x.go", Content: "bug"}}, nil
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
+			return []model.LlmComment{{Path: "x.go", Content: "bug"}}, finding.TokenUsage{}, nil
 		},
 	}
 	res, _ := o.Execute(context.Background())
@@ -96,11 +100,11 @@ func TestExecutePartialFailureContinues(t *testing.T) {
 			mkScanner("ok-one", "anthropic", "m1", nil),
 			mkScanner("err-one", "openai", "m2", nil),
 		},
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
 			if sep.Spec.Name == "err-one" {
-				return nil, errors.New("rate limited")
+				return nil, finding.TokenUsage{}, errors.New("rate limited")
 			}
-			return []model.LlmComment{{Path: "x.go", Content: "found"}}, nil
+			return []model.LlmComment{{Path: "x.go", Content: "found"}}, finding.TokenUsage{}, nil
 		},
 	}
 	res, err := o.Execute(context.Background())
@@ -127,8 +131,8 @@ func TestExecutePartialFailureContinues(t *testing.T) {
 func TestExecutePartialStatusWhenErrButHasFindings(t *testing.T) {
 	o := &Orchestrator{
 		Scanners: []ScannerEndpoint{mkScanner("s", "p", "m", nil)},
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
-			return []model.LlmComment{{Path: "x.go", Content: "got something"}}, errors.New("timeout on last file")
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
+			return []model.LlmComment{{Path: "x.go", Content: "got something"}}, finding.TokenUsage{InputTokens: 5, OutputTokens: 1}, errors.New("timeout on last file")
 		},
 	}
 	res, err := o.Execute(context.Background())
@@ -149,8 +153,8 @@ func TestExecuteAllFailFatal(t *testing.T) {
 			mkScanner("a", "p1", "m1", nil),
 			mkScanner("b", "p2", "m2", nil),
 		},
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
-			return nil, errors.New("dead")
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
+			return nil, finding.TokenUsage{}, errors.New("dead")
 		},
 	}
 	if _, err := o.Execute(context.Background()); err == nil {
@@ -166,11 +170,11 @@ func TestExecuteSkipsDisabledScanners(t *testing.T) {
 			mkScanner("off", "p", "m2", &off),
 			mkScanner("on2", "p", "m3", nil),
 		},
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
 			if sep.Spec.Name == "off" {
 				t.Errorf("disabled scanner was invoked")
 			}
-			return []model.LlmComment{{Path: "x.go", Content: "ok"}}, nil
+			return []model.LlmComment{{Path: "x.go", Content: "ok"}}, finding.TokenUsage{}, nil
 		},
 	}
 	res, _ := o.Execute(context.Background())
@@ -189,7 +193,7 @@ func TestExecuteConcurrencyBound(t *testing.T) {
 			mkScanner("d", "p", "m", nil),
 		},
 		MaxConcurrency: 2,
-		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, error) {
+		Run: func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
 			n := atomic.AddInt32(&inflight, 1)
 			for {
 				p := atomic.LoadInt32(&peak)
@@ -199,7 +203,7 @@ func TestExecuteConcurrencyBound(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 			atomic.AddInt32(&inflight, -1)
-			return []model.LlmComment{{Path: "x.go", Content: "ok"}}, nil
+			return []model.LlmComment{{Path: "x.go", Content: "ok"}}, finding.TokenUsage{}, nil
 		},
 	}
 	if _, err := o.Execute(context.Background()); err != nil {
