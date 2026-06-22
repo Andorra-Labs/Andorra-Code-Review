@@ -8,6 +8,8 @@ package main
 // Phase 4 scope: parallel scanner fan-out + raw findings. Dedup + arbiter wire
 // in via Phase 5 in this same file (Execute then runs through dedup -> arbiter
 // -> renderEnsemble).
+//
+// Trigger: tiny comment change to exercise the code-review workflow.
 
 import (
 	"context"
