@@ -183,24 +183,37 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Check Tailscale org variables are visible
+      - name: Check Tailscale OAuth credentials are visible
         if: steps.detect.outputs.present == 'true'
         env:
-          TS_OAUTH_CLIENT_ID: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ vars.TS_OAUTH_SECRET }}
+          # Prefer repository variables, but fall back to secrets for repos that
+          # have not migrated the Tailscale OAuth client credentials yet.
+          TS_OAUTH_CLIENT_ID: ${{ vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ vars.TS_OAUTH_SECRET || secrets.TS_OAUTH_SECRET }}
         run: |
-          # Diagnostic: verify the repository can read the Tailscale OAuth variables.
+          # Diagnostic: verify the repository can read the Tailscale OAuth credentials.
           # Length is printed; values remain masked by GitHub if non-empty.
           echo "TS_OAUTH_CLIENT_ID length: ${#TS_OAUTH_CLIENT_ID}"
           echo "TS_OAUTH_SECRET length: ${#TS_OAUTH_SECRET}"
+
+      - name: Sanity check resolved Tailscale OAuth lengths
+        if: steps.detect.outputs.present == 'true'
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ vars.TS_OAUTH_SECRET || secrets.TS_OAUTH_SECRET }}
+        run: |
+          # Print the lengths of the credentials that will be passed to the
+          # Tailscale action. Values remain masked by GitHub if non-empty.
+          echo "Resolved TS_OAUTH_CLIENT_ID length: ${#TS_OAUTH_CLIENT_ID}"
+          echo "Resolved TS_OAUTH_SECRET length: ${#TS_OAUTH_SECRET}"
 
       - name: Connect to Tailscale (so the runner can reach *.ts.net hosts
               like the Spark LLM endpoint configured in .ocr/config.json)
         if: steps.detect.outputs.present == 'true'
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ vars.TS_OAUTH_SECRET }}
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ vars.TS_OAUTH_SECRET || secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
       - name: Resolve Andorra Review HEAD SHA (cache key source)
