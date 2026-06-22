@@ -62,10 +62,10 @@ type ScannerSpec struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 	MaxTokens   int      `json:"max_tokens,omitempty"`
 	PromptTag   string   `json:"prompt_tag,omitempty"`
-	// Iterations runs the same scanner N independent times. On iterations
-	// after the first the prior pass's findings are summarized into the
-	// prompt so the model can search for ADDITIONAL bugs. 0/1 = single pass.
-	Iterations        int     `json:"iterations,omitempty"`
+	// Exhaustive, when true, runs the same scanner repeatedly until an
+	// iteration produces no new findings. Prior passes' findings are
+	// summarized into the prompt so the model does not re-report them.
+	Exhaustive        bool    `json:"exhaustive,omitempty"`
 	Enabled           *bool   `json:"enabled,omitempty"`
 	Bedrock           bool    `json:"bedrock,omitempty"`
 	Local             bool    `json:"local,omitempty"`
