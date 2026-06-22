@@ -25,8 +25,37 @@ func andorraConfig(args []string) (bool, error) {
 		return true, runConfigExport(args[1:])
 	case "ui":
 		return true, runConfigUI(args[1:])
+	case "set":
+		// Intercept ensemble.* keys so the documented `ocr config set
+		// ensemble.enabled true` non-interactive setup actually works.
+		// Non-ensemble keys fall through to upstream's setConfigValue.
+		if len(args) >= 3 && strings.HasPrefix(args[1], "ensemble") {
+			return true, runConfigSetEnsemble(args[1], args[2])
+		}
 	}
 	return false, nil
+}
+
+// runConfigSetEnsemble persists one ensemble.* key/value pair via configstore,
+// preserving every other top-level config key byte-for-byte (see configstore
+// docs for the raw-message merge contract).
+func runConfigSetEnsemble(key, value string) error {
+	path, err := defaultConfigPath()
+	if err != nil {
+		return err
+	}
+	ext, err := configstore.LoadAndorra(path)
+	if err != nil {
+		return fmt.Errorf("load ensemble config: %w", err)
+	}
+	if err := configstore.Set(ext, key, value); err != nil {
+		return err
+	}
+	if err := configstore.SaveAndorra(path, ext); err != nil {
+		return err
+	}
+	fmt.Printf("Set %s = %s\n", key, value)
+	return nil
 }
 
 func runConfigExport(args []string) error {

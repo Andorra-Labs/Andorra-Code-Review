@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-code-review/open-code-review/internal/configstore"
 	"github.com/open-code-review/open-code-review/internal/finding"
 )
 
@@ -177,6 +178,82 @@ func TestGroupStableIDs(t *testing.T) {
 		if !strings.HasPrefix(g1[i].GroupID, "g-") {
 			t.Errorf("unexpected gid format: %s", g1[i].GroupID)
 		}
+	}
+}
+
+func TestLineIoUUnresolvedRangeReturnsZero(t *testing.T) {
+	// When the diff-resolver fails, comments keep StartLine=0, EndLine=0.
+	// Two such unresolved findings on the same file must NOT merge purely
+	// because their (0,0) ranges nominally overlap 100%.
+	if got := lineIoU(0, 0, 0, 0); got != 0 {
+		t.Errorf("lineIoU(0,0,0,0)=%f, want 0", got)
+	}
+	if got := lineIoU(0, 0, 10, 20); got != 0 {
+		t.Errorf("lineIoU(0,0,10,20)=%f, want 0", got)
+	}
+	if got := lineIoU(10, 20, 0, 0); got != 0 {
+		t.Errorf("lineIoU(10,20,0,0)=%f, want 0", got)
+	}
+}
+
+func TestGroupDoesNotMergeUnresolvedFindings(t *testing.T) {
+	// Two distinct scanner findings whose line ranges failed to resolve
+	// (0-0) must stay in separate groups absent a shared existing_code.
+	raw := []finding.RawFinding{
+		mkRaw("opus", "a.go", "concern about loop boundary", 0, 0, ""),
+		mkRaw("gpt", "a.go", "totally unrelated nil deref", 0, 0, ""),
+	}
+	if got := Group(raw, Default()); len(got) != 2 {
+		t.Errorf("len=%d, want 2 (unresolved ranges should not merge); %+v", len(got), got)
+	}
+}
+
+func TestFromConfigStoreAllowsFalse(t *testing.T) {
+	// User explicitly disables RequireSamePath and ExistingCodeExactBoost.
+	// Previously these were silently re-asserted to true by `||` against
+	// the defaults.
+	cs := &configstore.DedupConfig{
+		LineOverlapMinRatio:    0.4,
+		TitleSimilarityMin:     0.6,
+		RequireSamePath:        false,
+		ExistingCodeExactBoost: false,
+	}
+	cfg := FromConfigStore(cs)
+	if cfg.RequireSamePath {
+		t.Error("RequireSamePath=true, want false (user explicitly disabled it)")
+	}
+	if cfg.ExistingCodeExactBoost {
+		t.Error("ExistingCodeExactBoost=true, want false")
+	}
+	if cfg.LineOverlapMinRatio != 0.4 {
+		t.Errorf("LineOverlapMinRatio=%f, want 0.4", cfg.LineOverlapMinRatio)
+	}
+}
+
+func TestFromConfigStoreNilReturnsDefault(t *testing.T) {
+	cfg := FromConfigStore(nil)
+	def := Default()
+	if cfg != def {
+		t.Errorf("FromConfigStore(nil)=%+v, want %+v", cfg, def)
+	}
+}
+
+func TestFromConfigStoreZeroNumericsFallBackToDefault(t *testing.T) {
+	// Boolean zero-value (false) is honored exactly. Numeric zeroes remain
+	// ambiguous — accidentally omitting the field shouldn't disable dedup
+	// entirely — so we substitute the default for zero numerics.
+	cs := &configstore.DedupConfig{}
+	cfg := FromConfigStore(cs)
+	def := Default()
+	if cfg.LineOverlapMinRatio != def.LineOverlapMinRatio {
+		t.Errorf("zero overlap ratio not substituted: %f", cfg.LineOverlapMinRatio)
+	}
+	if cfg.TitleSimilarityMin != def.TitleSimilarityMin {
+		t.Errorf("zero title sim not substituted: %f", cfg.TitleSimilarityMin)
+	}
+	// Bools stay at their zero value (false).
+	if cfg.RequireSamePath || cfg.ExistingCodeExactBoost {
+		t.Error("booleans should remain false (zero value), not default to true")
 	}
 }
 

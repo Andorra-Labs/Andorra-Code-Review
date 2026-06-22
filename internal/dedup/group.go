@@ -31,20 +31,27 @@ func Default() Config {
 }
 
 // FromConfigStore converts a configstore.DedupConfig (which may be nil) into
-// a Config, applying defaults for unset fields.
+// a Config. When cs is nil, returns Default(). When cs is non-nil, all fields
+// come from cs directly — including booleans set to false, which would
+// otherwise be silently overridden by the defaults via boolean OR.
 func FromConfigStore(cs *configstore.DedupConfig) Config {
-	cfg := Default()
 	if cs == nil {
-		return cfg
+		return Default()
 	}
-	if cs.LineOverlapMinRatio > 0 {
-		cfg.LineOverlapMinRatio = cs.LineOverlapMinRatio
+	cfg := Config{
+		LineOverlapMinRatio:    cs.LineOverlapMinRatio,
+		TitleSimilarityMin:     cs.TitleSimilarityMin,
+		RequireSamePath:        cs.RequireSamePath,
+		ExistingCodeExactBoost: cs.ExistingCodeExactBoost,
 	}
-	if cs.TitleSimilarityMin > 0 {
-		cfg.TitleSimilarityMin = cs.TitleSimilarityMin
+	// Numeric zeroes are ambiguous (unset vs intentional 0). Treat zero as
+	// unset and substitute the default to keep accidental-omission safe.
+	if cfg.LineOverlapMinRatio == 0 {
+		cfg.LineOverlapMinRatio = Default().LineOverlapMinRatio
 	}
-	cfg.RequireSamePath = cs.RequireSamePath || cfg.RequireSamePath
-	cfg.ExistingCodeExactBoost = cs.ExistingCodeExactBoost || cfg.ExistingCodeExactBoost
+	if cfg.TitleSimilarityMin == 0 {
+		cfg.TitleSimilarityMin = Default().TitleSimilarityMin
+	}
 	return cfg
 }
 
@@ -107,8 +114,17 @@ func shouldMerge(a, b finding.RawFinding, cfg Config) bool {
 }
 
 // lineIoU returns the intersection-over-union of two inclusive line ranges.
-// Returns 0 if either range is degenerate (end < start).
+// Returns 0 if either range is degenerate (end < start), if either is the
+// unresolved zero range (0,0) — line resolution failure leaves comments at
+// 0-0 and we must not treat two such findings as "fully overlapping" — or if
+// the inputs are negative.
 func lineIoU(s1, e1, s2, e2 int) float64 {
+	if s1 <= 0 && e1 <= 0 {
+		return 0
+	}
+	if s2 <= 0 && e2 <= 0 {
+		return 0
+	}
 	if e1 < s1 || e2 < s2 {
 		return 0
 	}

@@ -33,8 +33,11 @@ func Validate(ext *AndorraExt) []error {
 		} else {
 			seenNames[s.Name] = struct{}{}
 		}
-		if s.Provider == "" {
-			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): provider is required", i, s.Name))
+		if s.Provider == "" && !s.Bedrock {
+			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): provider is required (or set bedrock=true)", i, s.Name))
+		}
+		if s.Bedrock && s.Model == "" {
+			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): bedrock scanners require a non-empty model id", i, s.Name))
 		}
 		if s.Weight < 0 {
 			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): weight must be >= 0 (got %g)", i, s.Name, s.Weight))
@@ -52,6 +55,9 @@ func Validate(ext *AndorraExt) []error {
 	if e.Arbiter != nil {
 		if e.Arbiter.Provider == "" && !e.Arbiter.Bedrock {
 			errs = append(errs, fmt.Errorf("ensemble.arbiter.provider is required (or set ensemble.arbiter.bedrock=true)"))
+		}
+		if e.Arbiter.Bedrock && e.Arbiter.Model == "" {
+			errs = append(errs, fmt.Errorf("ensemble.arbiter: bedrock arbiter requires a non-empty model id"))
 		}
 		if !validArbiterMode(e.Arbiter.Mode) {
 			errs = append(errs, fmt.Errorf("ensemble.arbiter.mode %q is invalid (allowed: %v)", e.Arbiter.Mode, ValidArbiterModes[1:]))

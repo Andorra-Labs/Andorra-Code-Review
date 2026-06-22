@@ -145,7 +145,16 @@ func (s *server) handleEnsembleSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "CSRF token mismatch", http.StatusForbidden)
 		return
 	}
+	// Load the existing config first so we can preserve scanner / arbiter
+	// fields the form does not expose (Enabled, Temperature, MaxTokens,
+	// PromptTag, etc). Without this, every save would clobber those values.
+	prior, err := configstore.LoadAndorra(s.configPath)
+	if err != nil {
+		s.renderEnsembleForm(w, nil, []error{err})
+		return
+	}
 	ext := buildExtFromForm(r)
+	mergeHiddenFields(ext, prior)
 	if errs := configstore.Validate(ext); len(errs) > 0 {
 		s.renderEnsembleForm(w, ext, errs)
 		return
@@ -156,6 +165,48 @@ func (s *server) handleEnsembleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setFlash("Ensemble configuration saved.", "success")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// mergeHiddenFields copies fields that are not exposed by the ensemble form
+// (per-scanner Enabled / Temperature / MaxTokens / PromptTag; per-arbiter
+// Temperature) from the on-disk config onto the form-built ext so a save
+// never silently re-enables a disabled scanner or wipes a custom temperature.
+func mergeHiddenFields(ext, prior *configstore.AndorraExt) {
+	if ext == nil || ext.Ensemble == nil || prior == nil || prior.Ensemble == nil {
+		return
+	}
+	priorByName := map[string]configstore.ScannerSpec{}
+	for _, s := range prior.Ensemble.Scanners {
+		priorByName[s.Name] = s
+	}
+	for i := range ext.Ensemble.Scanners {
+		name := ext.Ensemble.Scanners[i].Name
+		old, ok := priorByName[name]
+		if !ok {
+			continue
+		}
+		// The form does not expose these fields; carry them over verbatim.
+		if ext.Ensemble.Scanners[i].Enabled == nil {
+			ext.Ensemble.Scanners[i].Enabled = old.Enabled
+		}
+		if ext.Ensemble.Scanners[i].Temperature == nil {
+			ext.Ensemble.Scanners[i].Temperature = old.Temperature
+		}
+		if ext.Ensemble.Scanners[i].MaxTokens == 0 {
+			ext.Ensemble.Scanners[i].MaxTokens = old.MaxTokens
+		}
+		if ext.Ensemble.Scanners[i].PromptTag == "" {
+			ext.Ensemble.Scanners[i].PromptTag = old.PromptTag
+		}
+	}
+	if ext.Ensemble.Arbiter != nil && prior.Ensemble.Arbiter != nil {
+		if ext.Ensemble.Arbiter.Temperature == nil {
+			ext.Ensemble.Arbiter.Temperature = prior.Ensemble.Arbiter.Temperature
+		}
+		if ext.Ensemble.Arbiter.MaxTokens == 0 {
+			ext.Ensemble.Arbiter.MaxTokens = prior.Ensemble.Arbiter.MaxTokens
+		}
+	}
 }
 
 func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {

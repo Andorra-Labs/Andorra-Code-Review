@@ -280,10 +280,13 @@ func runAndorraReview(args []string) error {
 		return fmt.Errorf("load diffs: %w", err)
 	}
 
-	// Inner concurrency floored at 2 so we don't blow rate limits.
+	// Honor the requested total concurrency as a budget shared across the
+	// scanner fan-out. With many scanners and a small --concurrency, each
+	// scanner runs files sequentially rather than multiplying total
+	// in-flight LLM requests beyond what the user asked for.
 	perScannerConcurrency := opts.concurrency / len(scanners)
-	if perScannerConcurrency < 2 {
-		perScannerConcurrency = 2
+	if perScannerConcurrency < 1 {
+		perScannerConcurrency = 1
 	}
 
 	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
@@ -297,12 +300,18 @@ func runAndorraReview(args []string) error {
 		}
 		tools := buildToolRegistry(collector, fr)
 
+		// Per-scanner template so per-scanner MaxTokens override actually
+		// caps the prompt budget for this Agent without leaking to siblings.
+		scannerTpl := *tpl
+		if sep.Spec.MaxTokens > 0 {
+			scannerTpl.MaxTokens = sep.Spec.MaxTokens
+		}
 		ag := agent.New(agent.Args{
 			RepoDir:               repoDir,
 			From:                  opts.from,
 			To:                    opts.to,
 			Commit:                opts.commit,
-			Template:              *tpl,
+			Template:              scannerTpl,
 			SystemRule:            resolver,
 			FileFilter:            fileFilter,
 			LLMClient:             client,

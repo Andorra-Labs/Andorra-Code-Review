@@ -1,32 +1,44 @@
-# Andorra OCR ensemble review on pull requests.
+# Andorra OCR ensemble review — build phase.
 #
-# This workflow expects a committed `.ocr/config.json` at the repo root,
-# produced by running `ocr config export` locally. The file references API
-# keys via ${env:NAME} placeholders, which CI fills from repository secrets.
+# SECURITY: this workflow uses `pull_request` (not `pull_request_target`), so
+# it runs in the FORK context with no access to repository secrets. It builds
+# the OCR binary from the PR head and uploads it as an artifact for the
+# companion `andorra-ocr-review-post.yml` workflow to consume. Because this
+# job has no secrets and no write tokens, malicious fork PRs cannot exfiltrate
+# anything by tampering with the checked-out code.
 #
-# To set up:
-#   1. Locally:   ocr config ui  (or `ocr config provider`, `ocr config set ...`)
-#   2. Locally:   ocr config export        (writes .ocr/config.json)
+# The actual review (which needs secrets to call LLM APIs) and the comment
+# posting (which needs the PR-write token) happen in the companion workflow,
+# triggered by workflow_run when this job finishes. That workflow never
+# executes PR head code — it only consumes the artifact this job produced.
+#
+# See:
+#   https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+#
+# Setup:
+#   1. Locally:   ocr config ui  (configure scanners + arbiter)
+#   2. Locally:   ocr config export
 #   3. Commit:    git add .ocr/config.json && git commit
-#   4. In CI:     add the API keys this workflow references as repo secrets
-#                 (OCR_ANTHROPIC_API_KEY, OCR_OPENAI_API_KEY, etc. - the names
-#                 match what the export placed in your .ocr/config.json).
-name: Andorra OCR Review
+#   4. In CI:     add OCR_ANTHROPIC_API_KEY / OCR_OPENAI_API_KEY /
+#                 OCR_BEDROCK_API_KEY / OCR_BEDROCK_REGION as repo or org
+#                 secrets, matching the ${env:NAME} placeholders in
+#                 your .ocr/config.json.
+name: Andorra OCR Review (build)
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
-  review:
+  build:
+    name: Build OCR + collect diff
     runs-on: ubuntu-latest
     if: ${{ !github.event.pull_request.draft }}
     steps:
-      - name: Check out PR head
+      - name: Check out PR head (no secrets in this job)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -43,66 +55,24 @@ jobs:
       - name: Build OCR
         run: go build -o ocr ./cmd/opencodereview
 
-      - name: Run ensemble review
-        env:
-          # These names match what `ocr config export --placeholder-secrets`
-          # writes into .ocr/config.json. Edit to match your providers.
-          OCR_ANTHROPIC_API_KEY: ${{ secrets.OCR_ANTHROPIC_API_KEY }}
-          OCR_OPENAI_API_KEY: ${{ secrets.OCR_OPENAI_API_KEY }}
+      - name: Stage artifact
         run: |
-          ./ocr review \
-            --ensemble \
-            --config .ocr/config.json \
-            --from origin/${{ github.event.pull_request.base.ref }} \
-            --to ${{ github.event.pull_request.head.sha }} \
-            --format json \
-            > review.json
+          mkdir -p artifact
+          cp ocr artifact/
+          if [ -f .ocr/config.json ]; then
+            cp .ocr/config.json artifact/config.json
+          else
+            echo '::error::.ocr/config.json missing — run `ocr config export` and commit the result.'
+            exit 1
+          fi
+          echo '${{ github.event.pull_request.number }}' > artifact/pr_number
+          echo '${{ github.event.pull_request.base.ref }}' > artifact/base_ref
+          echo '${{ github.event.pull_request.head.sha }}' > artifact/head_sha
+          git rev-parse origin/${{ github.event.pull_request.base.ref }} > artifact/base_sha
 
-      - name: Post review comments
-        if: always() && hashFiles('review.json') != ''
-        uses: actions/github-script@v7
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
-            const data = JSON.parse(fs.readFileSync('review.json', 'utf8'));
-            const comments = (data.comments || []).map(c => ({
-              path: c.path,
-              line: c.end_line || c.start_line,
-              side: 'RIGHT',
-              body: c.content + (c.suggestion_code
-                ? '\n\n```suggestion\n' + c.suggestion_code + '\n```'
-                : '')
-            }));
-            const summary = data.ensemble
-              ? `**Andorra OCR ensemble:** ${data.ensemble.scanners.length} scanners, ${data.ensemble.groups.length} groups → ${comments.length} accepted bug(s).`
-              : `**Andorra OCR:** ${comments.length} comment(s).`;
-            if (comments.length === 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: summary + '\n\n_No accepted-bug findings on this diff._'
-              });
-              return;
-            }
-            try {
-              await github.rest.pulls.createReview({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                commit_id: '${{ github.event.pull_request.head.sha }}',
-                event: 'COMMENT',
-                body: summary,
-                comments
-              });
-            } catch (err) {
-              core.warning(`createReview failed: ${err.message}. Falling back to issue comment.`);
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: summary + '\n\n' + comments.map(c =>
-                  `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n')
-              });
-            }
+          name: ocr-build
+          path: artifact/
+          retention-days: 1

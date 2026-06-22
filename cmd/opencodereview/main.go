@@ -45,10 +45,15 @@ func dispatch() error {
 		printVersion()
 		return nil
 	case "review", "r":
-		if shouldRunEnsemble(args[1:]) {
-			return runAndorraReview(args[1:])
+		reviewArgs := args[1:]
+		if shouldRunEnsemble(reviewArgs) {
+			return runAndorraReview(reviewArgs)
 		}
-		return runReview(args[1:])
+		// Strip ensemble-only flags before falling through so the legacy
+		// parser does not error on flags like --no-ensemble that the user
+		// passed explicitly to force this path.
+		_, legacyArgs := splitEnsembleArgs(reviewArgs)
+		return runReview(legacyArgs)
 	case "config":
 		return runConfig(args[1:])
 	case "llm":
