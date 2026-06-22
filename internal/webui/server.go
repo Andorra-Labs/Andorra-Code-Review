@@ -209,10 +209,17 @@ func mergeHiddenFields(ext, prior *configstore.AndorraExt) {
 	}
 	// Dedup booleans aren't exposed by the form. Without merging, tuning a
 	// threshold would silently disable RequireSamePath / ExistingCodeExactBoost
-	// (their zero values), changing grouping semantics on every save.
-	if ext.Ensemble.Dedup != nil && prior.Ensemble.Dedup != nil {
-		ext.Ensemble.Dedup.RequireSamePath = prior.Ensemble.Dedup.RequireSamePath
-		ext.Ensemble.Dedup.ExistingCodeExactBoost = prior.Ensemble.Dedup.ExistingCodeExactBoost
+	// (their zero values), changing grouping semantics on every save. When the
+	// prior config had no dedup block, fall back to the documented defaults so
+	// the first threshold tweak doesn't disable guards the user never saw.
+	if ext.Ensemble.Dedup != nil {
+		if prior.Ensemble.Dedup != nil {
+			ext.Ensemble.Dedup.RequireSamePath = prior.Ensemble.Dedup.RequireSamePath
+			ext.Ensemble.Dedup.ExistingCodeExactBoost = prior.Ensemble.Dedup.ExistingCodeExactBoost
+		} else {
+			ext.Ensemble.Dedup.RequireSamePath = true
+			ext.Ensemble.Dedup.ExistingCodeExactBoost = true
+		}
 	}
 }
 

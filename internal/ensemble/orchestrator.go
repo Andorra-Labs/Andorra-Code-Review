@@ -10,6 +10,7 @@ package ensemble
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -144,9 +145,17 @@ func (o *Orchestrator) Execute(ctx context.Context) (Result, error) {
 			case len(raws) > 0:
 				res.Status = "partial"
 				res.Err = err.Error()
+				res.Warnings = append(res.Warnings, agent.AgentWarning{
+					Type:    "scanner_partial",
+					Message: fmt.Sprintf("[%s] scanner returned %d finding(s) but errored: %s", sep.Spec.Name, len(raws), err.Error()),
+				})
 			default:
 				res.Status = "error"
 				res.Err = err.Error()
+				res.Warnings = append(res.Warnings, agent.AgentWarning{
+					Type:    "scanner_failed",
+					Message: fmt.Sprintf("[%s] scanner failed with no findings: %s", sep.Spec.Name, err.Error()),
+				})
 			}
 			results[i] = res
 		}()

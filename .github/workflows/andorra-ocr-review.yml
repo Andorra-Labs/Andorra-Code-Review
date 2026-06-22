@@ -128,9 +128,18 @@ jobs:
           # fork keeps the upstream module path, so that command would fetch
           # upstream code, not the fork.
           tmp="$(mktemp -d)"
-          git -c advice.detachedHead=false clone --depth 1 \
-            --branch "${ANDORRA_OCR_REF}" \
-            "${ANDORRA_OCR_REPO}" "${tmp}/src"
+          # `git clone --branch` only accepts branch/tag names, not raw SHAs.
+          # Detect a 40-char hex SHA and use a clone-then-checkout flow so
+          # operators who follow the security guidance and pin by commit SHA
+          # actually get a working install.
+          if [[ "${ANDORRA_OCR_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            git clone --no-checkout --filter=blob:none "${ANDORRA_OCR_REPO}" "${tmp}/src"
+            git -C "${tmp}/src" -c advice.detachedHead=false checkout "${ANDORRA_OCR_REF}"
+          else
+            git -c advice.detachedHead=false clone --depth 1 \
+              --branch "${ANDORRA_OCR_REF}" \
+              "${ANDORRA_OCR_REPO}" "${tmp}/src"
+          fi
           (cd "${tmp}/src" && go build -o "$(go env GOPATH)/bin/opencodereview" ./cmd/opencodereview)
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
@@ -147,6 +156,12 @@ jobs:
             cp .opencodereview/rule.json trusted-rules/rule.json
             echo "TRUSTED_RULE_PATH=$(pwd)/trusted-rules/rule.json" >> "$GITHUB_ENV"
           fi
+          # Unconditionally remove PR-head rule discovery surface. Even when
+          # --rule is set, rules.NewResolver still auto-discovers a project
+          # rule.json under repoDir; without this scrub, a fork PR adding
+          # pr-head/.opencodereview/rule.json could still inject PR-author-
+          # controlled rules into a base-config repo.
+          rm -rf pr-head/.opencodereview/rule.json pr-head/.opencodereview/rules || true
 
       - name: Run ensemble review (trusted binary + base config/rules + sandboxed PR data)
         if: steps.detect.outputs.present == 'true'
@@ -191,13 +206,27 @@ jobs:
             // back to a line) get reported separately in the summary text.
             const allComments = (data.comments || []).map(c => ({
               path: c.path,
+              startLine: c.start_line,
               line: c.end_line || c.start_line,
-              side: 'RIGHT',
               body: c.content + (c.suggestion_code
                 ? '\n\n```suggestion\n' + c.suggestion_code + '\n```'
                 : '')
             }));
-            const inline = allComments.filter(c => c.line > 0);
+            const inline = allComments.filter(c => c.line > 0).map(c => {
+              // Preserve multi-line ranges so GitHub suggestions cover the
+              // scanner's intended hunk rather than collapsing to one line.
+              const comment = {
+                path: c.path,
+                line: c.line,
+                side: 'RIGHT',
+                body: c.body,
+              };
+              if (c.startLine > 0 && c.startLine < c.line) {
+                comment.start_line = c.startLine;
+                comment.start_side = 'RIGHT';
+              }
+              return comment;
+            });
             const unresolved = allComments.filter(c => !(c.line > 0));
 
             const warnings = (data.warnings || []);

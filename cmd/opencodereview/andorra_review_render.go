@@ -26,22 +26,36 @@ func aggregateWarnings(res ensemble.Result) []agent.AgentWarning {
 	return out
 }
 
-// arbiterOutage reports whether the arbiter call failed (no usage reported)
-// despite there being groups to judge. When true, every group ended up as
-// VerdictUncertain because applyVerdicts fell back to the unavailable path.
-func arbiterOutage(usage finding.TokenUsage, finals []finding.FinalFinding) bool {
+// arbiterOutage reports whether the arbiter run effectively failed: every
+// group fell back to VerdictUncertain with one of applyVerdicts' fallback
+// reasons. Token usage alone isn't a reliable signal — the model may have
+// reported usage while emitting no usable verdicts (wrong tool, unparsable
+// args, mismatched group_ids) — so we key off the synthetic reasons the
+// arbiter assigns when no verdict came back for a group.
+func arbiterOutage(_ finding.TokenUsage, finals []finding.FinalFinding) bool {
 	if len(finals) == 0 {
-		return false
-	}
-	if usage.InputTokens != 0 || usage.OutputTokens != 0 {
 		return false
 	}
 	for _, f := range finals {
 		if f.Verdict != finding.VerdictUncertain {
 			return false
 		}
+		if !isArbiterFallbackReason(f.VerdictReason) {
+			return false
+		}
 	}
 	return true
+}
+
+// isArbiterFallbackReason matches the synthetic reasons applyVerdicts assigns
+// when the arbiter call yields no verdict for a group. Kept in sync with the
+// strings in internal/arbiter/arbiter.go applyVerdicts.
+func isArbiterFallbackReason(reason string) bool {
+	switch reason {
+	case "arbiter unavailable", "arbiter omitted verdict":
+		return true
+	}
+	return false
 }
 
 // injectArbiterOutageWarning appends a synthetic warning to the first
