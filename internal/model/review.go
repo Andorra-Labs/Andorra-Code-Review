@@ -9,6 +9,14 @@ type LlmComment struct {
 	StartLine      int    `json:"start_line"`
 	EndLine        int    `json:"end_line"`
 	Thinking       string `json:"thinking,omitempty"`
+	// Title is a short headline (≈5–8 words) for the finding. When set, the
+	// PR-posting workflow renders it as a bold line above Content. Optional;
+	// the workflow falls back to the first non-empty line of Content.
+	Title string `json:"title,omitempty"`
+	// Severity is "P1" / "P2" / "P3" — critical / warning / nit. When set,
+	// the workflow prefixes Title with a shields.io badge so reviewers can
+	// scan severities at a glance. Optional.
+	Severity string `json:"severity,omitempty"`
 }
 
 // CodeReviewResult holds raw LLM-generated review suggestion for a code segment.

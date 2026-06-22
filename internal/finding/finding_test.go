@@ -226,3 +226,109 @@ func TestToCommentEmptyMembers(t *testing.T) {
 		t.Errorf("expected title fallback, got %q", out.Content)
 	}
 }
+
+func TestFromCommentPrefersLLMTitle(t *testing.T) {
+	c := model.LlmComment{
+		Path: "f.go", Content: "First line of content\n\nBody",
+		Title:    "Explicit title from LLM",
+		Severity: "P1",
+	}
+	r := FromComment(c, Source{Scanner: "opus"}, 0)
+	if r.Title != "Explicit title from LLM" {
+		t.Errorf("title=%q, want explicit", r.Title)
+	}
+	if !r.ExplicitTitle {
+		t.Error("ExplicitTitle should be true when LLM supplied a title")
+	}
+	if r.Severity != "P1" {
+		t.Errorf("severity=%q, want P1", r.Severity)
+	}
+}
+
+func TestFromCommentFallsBackToContentFirstLine(t *testing.T) {
+	c := model.LlmComment{Path: "f.go", Content: "Off-by-one in loop\n\nDetail"}
+	r := FromComment(c, Source{Scanner: "opus"}, 0)
+	if r.Title != "Off-by-one in loop" {
+		t.Errorf("title=%q, want first-line fallback", r.Title)
+	}
+	if r.ExplicitTitle {
+		t.Error("ExplicitTitle should be false when title is synthesized from content")
+	}
+	if r.Severity != "" {
+		t.Errorf("severity=%q, want empty when LLM omits it", r.Severity)
+	}
+}
+
+func TestToCommentPropagatesTitleAndSeverity(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "d", Title: "earlier title", ExplicitTitle: true, Severity: "P2", Confidence: 0.4}
+	r2 := RawFinding{Path: "f.go", Detail: "d longer", Title: "Gate routing on enabled scanners", ExplicitTitle: true, Severity: "P1", Confidence: 0.9}
+	out := ToComment(mkFinal(VerdictAccepted, r1, r2), RenderOptions{})
+	if out.Title != "Gate routing on enabled scanners" {
+		t.Errorf("title=%q, want highest-confidence explicit title", out.Title)
+	}
+	// Higher-confidence member wins on severity.
+	if out.Severity != "P1" {
+		t.Errorf("severity=%q, want P1 (highest-confidence wins)", out.Severity)
+	}
+}
+
+func TestToCommentSeverityEmptyWhenAllMembersUnset(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "d"}
+	r2 := RawFinding{Path: "f.go", Detail: "d2"}
+	out := ToComment(mkFinal(VerdictAccepted, r1, r2), RenderOptions{})
+	if out.Severity != "" {
+		t.Errorf("severity=%q, want empty", out.Severity)
+	}
+}
+
+// Synthesized titles (ExplicitTitle = false) must not propagate to
+// LlmComment.Title; the renderer would otherwise prepend a bold header
+// that duplicates the first line of Content.
+func TestToCommentDropsSynthesizedTitle(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "Off-by-one in loop\n\nMore", Title: "Off-by-one in loop", ExplicitTitle: false, Confidence: 0.5}
+	r2 := RawFinding{Path: "f.go", Detail: "Off-by-one in loop\n\nMore detail", Title: "Off-by-one in loop", ExplicitTitle: false, Confidence: 0.9}
+	out := ToComment(mkFinal(VerdictAccepted, r1, r2), RenderOptions{})
+	if out.Title != "" {
+		t.Errorf("title=%q, want empty when no member has ExplicitTitle", out.Title)
+	}
+}
+
+// When some members supplied an explicit title and others didn't, prefer
+// the explicit one even if it's not the highest-confidence member overall.
+func TestToCommentPrefersExplicitOverSynthesized(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "d", Title: "extracted", ExplicitTitle: false, Confidence: 0.9}
+	r2 := RawFinding{Path: "f.go", Detail: "d", Title: "LLM gave us this", ExplicitTitle: true, Confidence: 0.2}
+	out := ToComment(mkFinal(VerdictAccepted, r1, r2), RenderOptions{})
+	if out.Title != "LLM gave us this" {
+		t.Errorf("title=%q, want explicit title even though confidence is lower", out.Title)
+	}
+}
+
+// On a confidence tie (the common scanner-doesn't-fill-confidence case),
+// pickSeverity must surface the WORST severity rather than letting member
+// order decide the outcome.
+func TestPickSeverityWorstWinsOnConfidenceTie(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "d", Severity: "P3", Confidence: 0}
+	r2 := RawFinding{Path: "f.go", Detail: "d", Severity: "P1", Confidence: 0}
+	r3 := RawFinding{Path: "f.go", Detail: "d", Severity: "P2", Confidence: 0}
+	// Try both orderings so the test catches order-dependence regressions.
+	out := ToComment(mkFinal(VerdictAccepted, r1, r2, r3), RenderOptions{})
+	if out.Severity != "P1" {
+		t.Errorf("severity=%q, want P1 (worst wins on confidence tie)", out.Severity)
+	}
+	out2 := ToComment(mkFinal(VerdictAccepted, r3, r1, r2), RenderOptions{})
+	if out2.Severity != "P1" {
+		t.Errorf("reorder: severity=%q, want P1 (worst wins regardless of order)", out2.Severity)
+	}
+}
+
+// When confidences differ, the higher-confidence severity wins even if it's
+// less severe — scanners that report confidence are saying "I'm sure"; trust them.
+func TestPickSeverityConfidenceBeatsRank(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "d", Severity: "P1", Confidence: 0.2}
+	r2 := RawFinding{Path: "f.go", Detail: "d", Severity: "P3", Confidence: 0.9}
+	out := ToComment(mkFinal(VerdictAccepted, r1, r2), RenderOptions{})
+	if out.Severity != "P3" {
+		t.Errorf("severity=%q, want P3 (higher confidence beats rank)", out.Severity)
+	}
+}

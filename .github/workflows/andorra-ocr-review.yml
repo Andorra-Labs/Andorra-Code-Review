@@ -233,6 +233,21 @@ jobs:
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('review.json', 'utf8'));
 
+            // Severity → shields.io badge color. P1 critical = red, P2
+            // warning = yellow, P3 nit = blue. Unknown / missing values render
+            // without a badge so the comment still posts cleanly.
+            const SEVERITY_COLOR = { P1: 'red', P2: 'yellow', P3: 'blue' };
+            const renderHeader = (severity, title) => {
+              const t = (title || '').trim();
+              const sev = (severity || '').trim().toUpperCase();
+              const color = SEVERITY_COLOR[sev];
+              if (color && t) {
+                return `**<sub><sub>![${sev} Badge](https://img.shields.io/badge/${sev}-${color}?style=flat)</sub></sub>  ${t}**\n\n`;
+              }
+              if (t) return `**${t}**\n\n`;
+              return '';
+            };
+
             // Split findings into inline-renderable vs no-line. createReview
             // rejects the whole batch if any comment has line=0, so unresolved
             // findings (where the diff resolver couldn't match existing_code
@@ -241,7 +256,7 @@ jobs:
               path: c.path,
               startLine: c.start_line,
               line: c.end_line || c.start_line,
-              body: c.content + (c.suggestion_code
+              body: renderHeader(c.severity, c.title) + c.content + (c.suggestion_code
                 ? '\n\n```suggestion\n' + c.suggestion_code + '\n```'
                 : '')
             }));
