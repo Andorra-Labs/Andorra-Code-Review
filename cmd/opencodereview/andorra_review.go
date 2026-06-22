@@ -553,6 +553,13 @@ func runAndorraReview(args []string) error {
 		for _, sr := range result.Scanners {
 			if sr.Status == "error" {
 				fmt.Fprintf(os.Stderr, "[ocr] scanner %q (%s/%s) failed: %s\n", sr.Name, sr.Provider, sr.Model, sr.Err)
+				for _, w := range sr.Warnings {
+					loc := w.File
+					if loc == "" {
+						loc = w.Type
+					}
+					fmt.Fprintf(os.Stderr, "[ocr]   %s: %s\n", loc, w.Message)
+				}
 			}
 		}
 		if eopts.debugTrace != "" {
