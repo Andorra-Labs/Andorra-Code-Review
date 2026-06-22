@@ -390,65 +390,85 @@ func runAndorraReview(args []string) error {
 	}
 
 	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, []agent.AgentWarning, error) {
-		client := buildClient(sep.Endpoint, sep.Spec.Bedrock)
-		collector := tool.NewCommentCollector()
+		iterations := sep.Spec.Iterations
+		if iterations < 1 {
+			iterations = 1
+		}
 		fr := &tool.FileReader{
 			RepoDir: repoDir,
 			Mode:    mode,
 			Ref:     ref,
 			Runner:  gitRunner,
 		}
-		tools := buildToolRegistry(collector, fr)
-
 		// Per-scanner template so per-scanner MaxTokens override actually
 		// caps the prompt budget for this Agent without leaking to siblings.
 		scannerTpl := *tpl
 		if sep.Spec.MaxTokens > 0 {
 			scannerTpl.MaxTokens = sep.Spec.MaxTokens
 		}
-		ag := agent.New(agent.Args{
-			RepoDir:               repoDir,
-			From:                  opts.from,
-			To:                    opts.to,
-			Commit:                opts.commit,
-			Template:              scannerTpl,
-			SystemRule:            resolver,
-			FileFilter:            fileFilter,
-			LLMClient:             client,
-			Tools:                 tools,
-			PlanToolDefs:          planToolDefs,
-			MainToolDefs:          mainToolDefs,
-			CommentCollector:      collector,
-			CommentWorkerPool:     agent.NewCommentWorkerPool(perScannerConcurrency),
-			MaxConcurrency:        perScannerConcurrency,
-			ConcurrentTaskTimeout: opts.perFileTimeout,
-			Model:                 sep.Endpoint.Model,
-			Temperature:           sep.Spec.Temperature,
-			Background:            opts.background,
-			GitRunner:             gitRunner,
-			PrecomputedDiffs:      parsedDiffs,
-		})
-		comments, err := ag.Run(ctx)
-		usage := finding.TokenUsage{
-			InputTokens:      ag.TotalInputTokens(),
-			OutputTokens:     ag.TotalOutputTokens(),
-			CacheReadTokens:  ag.TotalCacheReadTokens(),
-			CacheWriteTokens: ag.TotalCacheWriteTokens(),
+
+		var (
+			allComments []model.LlmComment
+			allWarnings []agent.AgentWarning
+			totalUsage  finding.TokenUsage
+		)
+		for iter := 0; iter < iterations; iter++ {
+			client := buildClient(sep.Endpoint, sep.Spec.Bedrock)
+			collector := tool.NewCommentCollector()
+			tools := buildToolRegistry(collector, fr)
+
+			background := opts.background
+			if iter > 0 {
+				background = appendPriorFindingsContext(background, allComments)
+			}
+
+			ag := agent.New(agent.Args{
+				RepoDir:               repoDir,
+				From:                  opts.from,
+				To:                    opts.to,
+				Commit:                opts.commit,
+				Template:              scannerTpl,
+				SystemRule:            resolver,
+				FileFilter:            fileFilter,
+				LLMClient:             client,
+				Tools:                 tools,
+				PlanToolDefs:          planToolDefs,
+				MainToolDefs:          mainToolDefs,
+				CommentCollector:      collector,
+				CommentWorkerPool:     agent.NewCommentWorkerPool(perScannerConcurrency),
+				MaxConcurrency:        perScannerConcurrency,
+				ConcurrentTaskTimeout: opts.perFileTimeout,
+				Model:                 sep.Endpoint.Model,
+				Temperature:           sep.Spec.Temperature,
+				Background:            background,
+				GitRunner:             gitRunner,
+				PrecomputedDiffs:      parsedDiffs,
+			})
+			comments, err := ag.Run(ctx)
+			totalUsage.InputTokens += ag.TotalInputTokens()
+			totalUsage.OutputTokens += ag.TotalOutputTokens()
+			totalUsage.CacheReadTokens += ag.TotalCacheReadTokens()
+			totalUsage.CacheWriteTokens += ag.TotalCacheWriteTokens()
+			allWarnings = append(allWarnings, ag.Warnings()...)
+			if err != nil {
+				return append(allComments, comments...), totalUsage, allWarnings, err
+			}
+			// Resolve line numbers per-iteration so the LlmComment ranges are valid.
+			comments = diff.ResolveLineNumbers(comments, ag.Diffs())
+			allComments = append(allComments, comments...)
 		}
-		warnings := ag.Warnings()
-		if err != nil {
-			return comments, usage, warnings, err
-		}
-		// Resolve line numbers per-scanner so the LlmComment ranges are valid.
-		comments = diff.ResolveLineNumbers(comments, ag.Diffs())
-		return comments, usage, warnings, nil
+		return allComments, totalUsage, allWarnings, nil
 	}
 
+	orchConcurrency := scannerFanOut
+	if ext.Ensemble.Serial {
+		orchConcurrency = 1
+	}
 	orch := &ensemble.Orchestrator{
 		Scanners:       scanners,
 		Arbiter:        arbiterEndpoint,
 		Run:            run,
-		MaxConcurrency: scannerFanOut,
+		MaxConcurrency: orchConcurrency,
 	}
 
 	// Silence progress output in agent / JSON mode the same way runReview does.
@@ -602,6 +622,35 @@ func resolveScanners(cfgPath string, specs []configstore.ScannerSpec, subset []s
 		out = append(out, ensemble.ScannerEndpoint{Spec: s, Endpoint: ep})
 	}
 	return out, nil
+}
+
+// appendPriorFindingsContext formats prior-iteration findings as a prompt
+// addendum the scanner sees via {{requirement_background}}. The arbiter
+// dedupes across iterations, so the goal here is to steer the next pass
+// toward NEW bugs, not to enforce uniqueness.
+func appendPriorFindingsContext(background string, prior []model.LlmComment) string {
+	if len(prior) == 0 {
+		return background
+	}
+	var b strings.Builder
+	if strings.TrimSpace(background) != "" {
+		b.WriteString(background)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("## Previously-found findings (from earlier passes of this same scanner)\n\n")
+	b.WriteString("A prior pass already flagged the following issues. Do NOT re-report them; instead look for ADDITIONAL bugs that the prior pass missed.\n\n")
+	for _, c := range prior {
+		path := c.Path
+		if path == "" {
+			path = "<unknown>"
+		}
+		title := strings.TrimSpace(strings.SplitN(c.Content, "\n", 2)[0])
+		if title == "" {
+			title = "(no title)"
+		}
+		fmt.Fprintf(&b, "- [%s:%d-%d] %s\n", path, c.StartLine, c.EndLine, title)
+	}
+	return b.String()
 }
 
 func printEnsembleUsage() {

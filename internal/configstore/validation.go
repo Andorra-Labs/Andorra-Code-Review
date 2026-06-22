@@ -50,6 +50,9 @@ func Validate(ext *AndorraExt) []error {
 		if s.MaxTokens < 0 {
 			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): max_tokens must be >= 0 (got %d)", i, s.Name, s.MaxTokens))
 		}
+		if s.Iterations < 0 {
+			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): iterations must be >= 0 (got %d)", i, s.Name, s.Iterations))
+		}
 		if s.Bedrock && s.Local {
 			errs = append(errs, fmt.Errorf("ensemble.scanners[%d] (%q): bedrock and local are mutually exclusive", i, s.Name))
 		}

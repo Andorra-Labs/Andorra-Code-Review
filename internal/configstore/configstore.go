@@ -28,7 +28,10 @@ type AndorraExt struct {
 // When Enabled is false (or the whole block is absent), legacy single-model
 // behavior runs.
 type EnsembleConfig struct {
-	Enabled  bool            `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Serial forces scanners to run one at a time (orchestrator concurrency = 1)
+	// instead of fanning out in parallel. Default (omitted) = parallel.
+	Serial   bool            `json:"serial,omitempty"`
 	Scanners []ScannerSpec   `json:"scanners,omitempty"`
 	Arbiter  *ArbiterSpec    `json:"arbiter,omitempty"`
 	Dedup    *DedupConfig    `json:"dedup,omitempty"`
@@ -49,18 +52,22 @@ type EnsembleConfig struct {
 // display a pro-rata cost in the summary grid. They apply to any model, not
 // just Bedrock; the Bedrock toggle just surfaces them in the UI by default.
 type ScannerSpec struct {
-	Name              string   `json:"name"`
-	Provider          string   `json:"provider"`
-	Model             string   `json:"model,omitempty"`
-	Weight            float64  `json:"weight,omitempty"`
-	Temperature       *float64 `json:"temperature,omitempty"`
-	MaxTokens         int      `json:"max_tokens,omitempty"`
-	PromptTag         string   `json:"prompt_tag,omitempty"`
-	Enabled           *bool    `json:"enabled,omitempty"`
-	Bedrock           bool     `json:"bedrock,omitempty"`
-	Local             bool     `json:"local,omitempty"`
-	CostPerMInputUSD  float64  `json:"cost_per_m_input_usd,omitempty"`
-	CostPerMOutputUSD float64  `json:"cost_per_m_output_usd,omitempty"`
+	Name        string   `json:"name"`
+	Provider    string   `json:"provider"`
+	Model       string   `json:"model,omitempty"`
+	Weight      float64  `json:"weight,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	MaxTokens   int      `json:"max_tokens,omitempty"`
+	PromptTag   string   `json:"prompt_tag,omitempty"`
+	// Iterations runs the same scanner N independent times. On iterations
+	// after the first the prior pass's findings are summarized into the
+	// prompt so the model can search for ADDITIONAL bugs. 0/1 = single pass.
+	Iterations        int     `json:"iterations,omitempty"`
+	Enabled           *bool   `json:"enabled,omitempty"`
+	Bedrock           bool    `json:"bedrock,omitempty"`
+	Local             bool    `json:"local,omitempty"`
+	CostPerMInputUSD  float64 `json:"cost_per_m_input_usd,omitempty"`
+	CostPerMOutputUSD float64 `json:"cost_per_m_output_usd,omitempty"`
 }
 
 // ArbiterSpec configures the arbiter pass that classifies grouped findings.

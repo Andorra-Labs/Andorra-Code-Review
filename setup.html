@@ -154,6 +154,26 @@
     padding: 0;
   }
   .model-chip button:hover { color: var(--danger); }
+  .model-input-row {
+    display: flex;
+    gap: 8px;
+  }
+  .model-input-row input { flex: 1; }
+  button.model-add-btn {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 0 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button.model-add-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
   .icon-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -262,6 +282,24 @@
     font-style: italic;
     padding: 8px 0;
   }
+  .scanner-row {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 8px;
+    position: relative;
+  }
+  .scanner-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr 80px;
+    gap: 12px;
+    align-items: end;
+  }
+  @media (max-width: 640px) {
+    .scanner-grid { grid-template-columns: 1fr 1fr; }
+  }
+  .scanner-row .row-actions { top: 8px; right: 8px; }
   .path-row {
     display: grid;
     grid-template-columns: 120px 1fr;
@@ -325,6 +363,41 @@
 </div>
 
 <div class="panel">
+  <h2>Ensemble <span style="color:var(--text-dim);font-weight:400;font-size:14px">(optional)</span></h2>
+  <p class="hint">Fan out the review to multiple scanners and let an arbiter dedupe and classify their findings. Requires at least two scanners and an arbiter.</p>
+  <div class="row">
+    <label style="text-transform:none;font-size:13px;color:var(--text);font-weight:400;display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <input type="checkbox" id="ensembleEnabled"> Enable ensemble mode
+    </label>
+    <label style="text-transform:none;font-size:13px;color:var(--text);font-weight:400;display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="ensembleSerial"> Run scanners serially (one agent at a time)
+    </label>
+  </div>
+  <h3>Scanners</h3>
+  <div id="scannersList"></div>
+  <button class="add-btn" id="addScanner" type="button">+ Add scanner</button>
+  <h3>Arbiter</h3>
+  <div class="provider-grid-3">
+    <div>
+      <label>Provider</label>
+      <select id="arbiterProvider"></select>
+    </div>
+    <div>
+      <label>Model</label>
+      <select id="arbiterModel"></select>
+    </div>
+    <div>
+      <label>Mode</label>
+      <select id="arbiterMode">
+        <option value="">(default: per_file)</option>
+        <option value="per_file">per_file</option>
+        <option value="per_group">per_group</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
   <h2>Preview</h2>
   <p class="hint">This is the <code class="inline">config.json</code> that will be downloaded. API keys are shown masked here but written in full to the downloaded file.</p>
   <pre id="preview">{}</pre>
@@ -365,6 +438,12 @@ const state = {
   providers: [],         // [{ id, name, url, protocol, api_key, auth_header, extra_body, models: [] }]
   activeProvider: "",
   activeModel: "",
+  ensemble: {
+    enabled: false,
+    serial: false,
+    scanners: [],        // [{ id, name, provider, model, iterations }]
+    arbiter: { provider: "", model: "", mode: "" },
+  },
 };
 
 let nextId = 1;
@@ -483,8 +562,21 @@ function removeProvider(id) {
     state.activeProvider = "";
     state.activeModel = "";
   }
+  if (removed) {
+    for (const s of state.ensemble.scanners) {
+      if (s.provider === removed.name) {
+        s.provider = "";
+        s.model = "";
+      }
+    }
+    if (state.ensemble.arbiter.provider === removed.name) {
+      state.ensemble.arbiter.provider = "";
+      state.ensemble.arbiter.model = "";
+    }
+  }
   renderProviders();
   renderActiveSelects();
+  renderEnsemble();
   scheduleRender();
 }
 
@@ -535,7 +627,10 @@ function providerCard(p) {
     <div class="row">
       <label>Models</label>
       <div class="model-list" data-field="models"></div>
-      <input type="text" data-field="model-input" placeholder="Type a model id and press Enter (e.g. claude-sonnet-4-6)">
+      <div class="model-input-row">
+        <input type="text" data-field="model-input" placeholder="Type a model id (e.g. claude-sonnet-4-6)">
+        <button type="button" class="model-add-btn" data-field="model-add">Add</button>
+      </div>
     </div>
   `;
 
@@ -558,7 +653,14 @@ function providerCard(p) {
         if (state.activeProvider === oldName) {
           state.activeProvider = newName;
         }
+        for (const s of state.ensemble.scanners) {
+          if (s.provider === oldName) s.provider = newName;
+        }
+        if (state.ensemble.arbiter.provider === oldName) {
+          state.ensemble.arbiter.provider = newName;
+        }
         renderActiveSelects();
+        renderEnsemble();
       }
       if (field === "name") validateProviderName(el, card.querySelector('[data-field="name-validation"]'), p.id);
       if (field === "url") validateURL(el, card.querySelector('[data-field="url-validation"]'));
@@ -570,17 +672,22 @@ function providerCard(p) {
     scheduleRender();
   });
   const modelInput = card.querySelector('[data-field="model-input"]');
+  const commitModel = () => {
+    const v = modelInput.value.trim();
+    if (v && !p.models.includes(v)) p.models.push(v);
+    modelInput.value = "";
+    renderModels(card, p);
+    renderActiveSelects();
+    renderEnsemble();
+    scheduleRender();
+  };
   modelInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      const v = modelInput.value.trim();
-      if (v && !p.models.includes(v)) p.models.push(v);
-      modelInput.value = "";
-      renderModels(card, p);
-      renderActiveSelects();
-      scheduleRender();
+      commitModel();
     }
   });
+  card.querySelector('[data-field="model-add"]').addEventListener("click", commitModel);
 
   return card;
 }
@@ -601,8 +708,15 @@ function renderModels(card, p) {
       if (state.activeProvider === p.name && state.activeModel === m) {
         state.activeModel = "";
       }
+      for (const s of state.ensemble.scanners) {
+        if (s.provider === p.name && s.model === m) s.model = "";
+      }
+      if (state.ensemble.arbiter.provider === p.name && state.ensemble.arbiter.model === m) {
+        state.ensemble.arbiter.model = "";
+      }
       renderModels(card, p);
       renderActiveSelects();
+      renderEnsemble();
       scheduleRender();
     });
     chip.appendChild(x);
@@ -659,6 +773,124 @@ function populateModelSelect(sel, providerName, current) {
   sel.value = current || "";
 }
 
+/* ───── ensemble ──────────────────────────────────────────────────────── */
+
+function addScanner(seed) {
+  const s = Object.assign({
+    id: uid(),
+    name: "",
+    provider: "",
+    model: "",
+    iterations: 0,
+  }, seed || {});
+  state.ensemble.scanners.push(s);
+  renderEnsemble();
+  scheduleRender();
+}
+
+function removeScanner(id) {
+  state.ensemble.scanners = state.ensemble.scanners.filter((s) => s.id !== id);
+  renderEnsemble();
+  scheduleRender();
+}
+
+function renderEnsemble() {
+  $("ensembleEnabled").checked = !!state.ensemble.enabled;
+  $("ensembleSerial").checked = !!state.ensemble.serial;
+  const list = $("scannersList");
+  list.innerHTML = "";
+  if (state.ensemble.scanners.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No scanners yet. Click “+ Add scanner” to add one.";
+    list.appendChild(empty);
+  } else {
+    for (const s of state.ensemble.scanners) list.appendChild(scannerRow(s));
+  }
+  populateProviderSelect($("arbiterProvider"), state.ensemble.arbiter.provider);
+  populateModelSelect($("arbiterModel"), state.ensemble.arbiter.provider, state.ensemble.arbiter.model);
+  $("arbiterMode").value = state.ensemble.arbiter.mode || "";
+}
+
+function scannerRow(s) {
+  const row = document.createElement("div");
+  row.className = "scanner-row";
+  row.dataset.id = s.id;
+  row.innerHTML = `
+    <div class="row-actions">
+      <button class="icon-btn" data-act="remove" title="Remove scanner" type="button">×</button>
+    </div>
+    <div class="scanner-grid">
+      <div>
+        <label>Name</label>
+        <input type="text" data-field="name" placeholder="opus, gpt, on-prem">
+      </div>
+      <div>
+        <label>Provider</label>
+        <select data-field="provider"></select>
+      </div>
+      <div>
+        <label>Model</label>
+        <select data-field="model"></select>
+      </div>
+      <div>
+        <label title="Run this scanner N independent times; arbiter dedupes. Each extra pass sees the prior pass's findings.">Iterations</label>
+        <input type="number" data-field="iterations" min="0" step="1" placeholder="1">
+      </div>
+    </div>
+  `;
+  row.querySelector('[data-field="name"]').value = s.name;
+  populateProviderSelect(row.querySelector('[data-field="provider"]'), s.provider);
+  populateModelSelect(row.querySelector('[data-field="model"]'), s.provider, s.model);
+  row.querySelector('[data-field="iterations"]').value = s.iterations || "";
+
+  row.querySelector('[data-act="remove"]').addEventListener("click", () => removeScanner(s.id));
+  row.querySelector('[data-field="name"]').addEventListener("input", (e) => {
+    s.name = e.target.value;
+    scheduleRender();
+  });
+  row.querySelector('[data-field="provider"]').addEventListener("change", (e) => {
+    s.provider = e.target.value;
+    s.model = "";
+    populateModelSelect(row.querySelector('[data-field="model"]'), s.provider, s.model);
+    scheduleRender();
+  });
+  row.querySelector('[data-field="model"]').addEventListener("change", (e) => {
+    s.model = e.target.value;
+    scheduleRender();
+  });
+  row.querySelector('[data-field="iterations"]').addEventListener("input", (e) => {
+    const v = parseInt(e.target.value, 10);
+    s.iterations = Number.isFinite(v) && v > 0 ? v : 0;
+    scheduleRender();
+  });
+  return row;
+}
+
+$("addScanner").addEventListener("click", () => addScanner());
+$("ensembleEnabled").addEventListener("change", (e) => {
+  state.ensemble.enabled = e.target.checked;
+  scheduleRender();
+});
+$("ensembleSerial").addEventListener("change", (e) => {
+  state.ensemble.serial = e.target.checked;
+  scheduleRender();
+});
+$("arbiterProvider").addEventListener("change", (e) => {
+  state.ensemble.arbiter.provider = e.target.value;
+  state.ensemble.arbiter.model = "";
+  populateModelSelect($("arbiterModel"), state.ensemble.arbiter.provider, "");
+  scheduleRender();
+});
+$("arbiterModel").addEventListener("change", (e) => {
+  state.ensemble.arbiter.model = e.target.value;
+  scheduleRender();
+});
+$("arbiterMode").addEventListener("change", (e) => {
+  state.ensemble.arbiter.mode = e.target.value;
+  scheduleRender();
+});
+
 /* ───── output ────────────────────────────────────────────────────────── */
 
 function buildConfig() {
@@ -686,6 +918,27 @@ function buildConfig() {
   if (state.activeProvider && state.activeModel) {
     cfg.provider = canonicalPresetName(state.activeProvider) || state.activeProvider;
     cfg.model = state.activeModel;
+  }
+  const e = state.ensemble;
+  if (e.enabled || e.scanners.length > 0 || e.arbiter.provider || e.arbiter.model) {
+    const ens = { enabled: !!e.enabled };
+    if (e.serial) ens.serial = true;
+    if (e.scanners.length > 0) {
+      ens.scanners = e.scanners
+        .filter((s) => s.name || s.provider || s.model)
+        .map((s) => {
+          const entry = { name: s.name, provider: s.provider };
+          if (s.model) entry.model = s.model;
+          if (s.iterations && s.iterations > 1) entry.iterations = s.iterations;
+          return entry;
+        });
+    }
+    if (e.arbiter.provider || e.arbiter.model || e.arbiter.mode) {
+      ens.arbiter = { provider: e.arbiter.provider };
+      if (e.arbiter.model) ens.arbiter.model = e.arbiter.model;
+      if (e.arbiter.mode) ens.arbiter.mode = e.arbiter.mode;
+    }
+    cfg.ensemble = ens;
   }
   return cfg;
 }
@@ -739,6 +992,12 @@ function importConfig(cfg) {
   state.providers = [];
   state.activeProvider = "";
   state.activeModel = "";
+  state.ensemble = {
+    enabled: false,
+    serial: false,
+    scanners: [],
+    arbiter: { provider: "", model: "", mode: "" },
+  };
 
   const cp = (cfg.custom_providers && typeof cfg.custom_providers === "object") ? cfg.custom_providers : {};
   const providers = (cfg.providers && typeof cfg.providers === "object") ? cfg.providers : {};
@@ -815,8 +1074,35 @@ function importConfig(cfg) {
     }
   }
 
+  // Hydrate ensemble block (fork extension).
+  if (cfg.ensemble && typeof cfg.ensemble === "object") {
+    const ens = cfg.ensemble;
+    state.ensemble.enabled = !!ens.enabled;
+    state.ensemble.serial = !!ens.serial;
+    if (Array.isArray(ens.scanners)) {
+      for (const s of ens.scanners) {
+        if (!s || typeof s !== "object") continue;
+        state.ensemble.scanners.push({
+          id: uid(),
+          name: s.name || "",
+          provider: s.provider || "",
+          model: s.model || "",
+          iterations: Number.isFinite(s.iterations) ? s.iterations : 0,
+        });
+      }
+    }
+    if (ens.arbiter && typeof ens.arbiter === "object") {
+      state.ensemble.arbiter = {
+        provider: ens.arbiter.provider || "",
+        model: ens.arbiter.model || "",
+        mode: ens.arbiter.mode || "",
+      };
+    }
+  }
+
   renderProviders();
   renderActiveSelects();
+  renderEnsemble();
   render();
 }
 
@@ -890,6 +1176,7 @@ $("copyBtn").addEventListener("click", async () => {
 
 renderProviders();
 renderActiveSelects();
+renderEnsemble();
 render();
 </script>
 </body>
