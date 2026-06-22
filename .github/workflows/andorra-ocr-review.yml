@@ -1,12 +1,20 @@
 # Andorra Review ensemble review on pull requests.
 #
-# === SECURITY MODEL ===
-# This workflow is `pull_request_target`-triggered so it has secret access
-# even on fork PRs. The safety story:
+# === TRIGGERS ===
+#   1. pull_request_target — opened/synchronize/reopened/ready_for_review.
+#      Standard automatic flow.
+#   2. issue_comment — when a repo collaborator comments "@andorra" (e.g.
+#      "@andorra review") on a PR. Useful to re-run after a transient
+#      failure or to review a draft on demand. The author_association
+#      check below limits this to OWNER / MEMBER / COLLABORATOR so a
+#      random commenter can't burn through scanner quota.
 #
-#   1. The OCR binary is `go install`-ed from a PINNED UPSTREAM VERSION.
-#      It is never built from PR source. Update the version below when you
-#      want to adopt a new release.
+# === SECURITY MODEL ===
+# This workflow runs with secret access on both triggers above. The safety
+# story:
+#
+#   1. The OCR binary is built from a TRUSTED REF (main of the Andorra
+#      fork), never from PR source.
 #   2. The config file (.ocr/config.json) is read from the BASE ref. Fork
 #      PRs cannot redirect API calls or change scanner config by editing
 #      that file in their branch.
@@ -14,6 +22,8 @@
 #      OCR binary reads those files as text (it's a static review tool —
 #      it never executes the code under review). Secrets are passed only
 #      to the trusted OCR binary, not to anything sourced from PR head.
+#   4. issue_comment triggers are gated on author_association so only
+#      users with write access can fire a run with the workflow's secrets.
 #
 # This is the standard mitigation for the pull_request_target pwn-request
 # antipattern: https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
@@ -22,40 +32,96 @@
 #   1. Locally:   ocr config ui     (configure scanners + arbiter)
 #   2. Locally:   ocr config export (writes .ocr/config.json with placeholders)
 #   3. Commit:    git add .ocr/config.json && git commit
-#   4. In CI:     add OCR_ANTHROPIC_API_KEY / OCR_OPENAI_API_KEY /
-#                 OCR_BEDROCK_API_KEY / OCR_BEDROCK_REGION (whichever your
-#                 .ocr/config.json placeholders reference) as repo or org
-#                 secrets.
+#   4. In CI:     add OCR_<UPPER_PROVIDER>_API_KEY secrets for each provider
+#                 referenced in .ocr/config.json (the runtime resolver and
+#                 the dynamic env-derivation in the review step both use
+#                 this convention).
 name: Andorra Review
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
 
-# Per-PR concurrency: a new push (synchronize) cancels any in-flight
-# review against the prior commit, so stale runs can't post review
-# comments after a newer run finishes.
+# Per-PR concurrency: a new push (synchronize) or a fresh @andorra comment
+# cancels any in-flight review against the prior commit, so stale runs
+# can't post review comments after a newer run finishes. Both event types
+# expose a PR number under different paths — `||` picks whichever is set.
 concurrency:
-  group: andorra-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+  group: andorra-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
   # issues: write covers the createComment fallback the post-review step
-  # uses when createReview fails or there are no inline comments to attach.
+  # uses when createReview fails or there are no inline comments to attach,
+  # and the 👍 reaction we drop on the trigger comment.
   issues: write
   actions: read
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.draft }}
+    # Three gates:
+    #   - pull_request_target: run unless the PR is a draft.
+    #   - issue_comment: comment must be on a PR (not a plain issue), must
+    #     contain "@andorra", and the commenter must have repo write
+    #     access (OWNER / MEMBER / COLLABORATOR). Without the
+    #     author_association check, anyone who can comment on a fork PR
+    #     could burn through scanner quota and trip rate limits.
+    if: >-
+      (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '@andorra') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     steps:
+      - name: React to trigger comment with 👍 (issue_comment only)
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: '+1',
+            });
+
+      - name: Resolve PR context (head/base SHAs + clone URLs, normalized
+              across pull_request_target and issue_comment events)
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            let pr;
+            if (context.eventName === 'pull_request_target') {
+              pr = context.payload.pull_request;
+            } else {
+              // issue_comment carries only the PR number; fetch full PR
+              // details so we get the same head/base shape downstream.
+              const r = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.issue.number,
+              });
+              pr = r.data;
+            }
+            core.setOutput('number', String(pr.number));
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_sha', pr.base.sha);
+            core.setOutput('base_ref', pr.base.ref);
+            core.setOutput('head_repo_url', pr.head.repo.clone_url);
+            core.setOutput('base_repo_url', pr.base.repo.clone_url);
+
       - name: Check out BASE ref (trusted — controls .ocr/config.json)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ steps.pr.outputs.base_sha }}
           fetch-depth: 0
 
       - name: Detect committed config
@@ -75,10 +141,10 @@ jobs:
         env:
           # head.repo.clone_url is set even for forks. We treat the result as
           # data: the trusted OCR binary reads files but never executes them.
-          HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
-          BASE_REPO_URL: ${{ github.event.pull_request.base.repo.clone_url }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REPO_URL: ${{ steps.pr.outputs.head_repo_url }}
+          BASE_REPO_URL: ${{ steps.pr.outputs.base_repo_url }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
           # GITHUB_TOKEN authenticates the raw clone for PRs from PRIVATE forks.
           # Public forks fetch fine without auth. The token is GitHub-issued and
           # only read by git's local config inside pr-head/, never echoed.
@@ -217,6 +283,8 @@ jobs:
           # naming convention (see internal/configstore/export.go's
           # envForProviderKey) without us caring which providers exist.
           ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
+          PR_BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set -euo pipefail
           # Build --rule arg only when the base ref committed a rule file;
@@ -279,19 +347,24 @@ jobs:
             --ensemble \
             --config ../.ocr/config.json \
             "${rule_arg[@]}" \
-            --from origin/${{ github.event.pull_request.base.ref }} \
-            --to ${{ github.event.pull_request.head.sha }} \
+            --from "origin/${PR_BASE_REF}" \
+            --to "${PR_HEAD_SHA}" \
             --format json \
             > ../review.json
 
       - name: Post review comments
         if: steps.detect.outputs.present == 'true' && hashFiles('review.json') != ''
         uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('review.json', 'utf8'));
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const headSha = process.env.PR_HEAD_SHA;
 
             // Severity → shields.io badge color. P1 critical = red, P2
             // warning = yellow, P3 nit = blue. Unknown / missing values render
@@ -358,7 +431,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
+                issue_number: prNumber,
                 body: body + (unresolved.length ? '' : '\n\n_No accepted-bug findings on this diff._')
               });
               return;
@@ -367,8 +440,8 @@ jobs:
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: context.issue.number,
-                commit_id: '${{ github.event.pull_request.head.sha }}',
+                pull_number: prNumber,
+                commit_id: headSha,
                 event: 'COMMENT',
                 body: body,
                 comments: inline,
@@ -378,7 +451,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
+                issue_number: prNumber,
                 body: body + '\n\n' + inline.map(c =>
                   `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n')
               });
