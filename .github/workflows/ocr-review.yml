@@ -27,7 +27,7 @@
 # repository secrets. Fork PR authors should trigger review via the comment
 # flow (e.g. `@ocr`) which runs on `issue_comment` and has secret access.
 
-name: OCR Review
+name: Andorra Review
 
 on:
   pull_request:
