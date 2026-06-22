@@ -401,6 +401,7 @@ func runAndorraReview(args []string) error {
 			MaxConcurrency:        perScannerConcurrency,
 			ConcurrentTaskTimeout: opts.perFileTimeout,
 			Model:                 sep.Endpoint.Model,
+			Temperature:           sep.Spec.Temperature,
 			Background:            opts.background,
 			GitRunner:             gitRunner,
 			PrecomputedDiffs:      parsedDiffs,

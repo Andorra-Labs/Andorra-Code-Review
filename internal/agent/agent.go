@@ -112,6 +112,10 @@ type Args struct {
 	// template phases (plan/memory_compression) don't specify one.
 	Model string
 
+	// Temperature is an optional per-agent sampling temperature passed to every
+	// LLM chat request. When nil, the provider default is used.
+	Temperature *float64
+
 	// GitRunner limits the total number of concurrent git subprocesses.
 	// When nil, subprocesses are spawned without a global limit.
 	GitRunner *gitcmd.Runner
@@ -640,9 +644,10 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	startTime := time.Now()
 
 	resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
-		Model:     a.args.Model,
-		Messages:  messages,
-		MaxTokens: a.args.Template.MaxTokens,
+		Model:       a.args.Model,
+		Messages:    messages,
+		Temperature: a.args.Temperature,
+		MaxTokens:   a.args.Template.MaxTokens,
 	})
 	if err != nil {
 		rec.SetError(err, time.Since(startTime))
@@ -851,9 +856,10 @@ func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFi
 	startTime := time.Now()
 
 	resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
-		Model:     a.args.Model,
-		Messages:  messages,
-		MaxTokens: a.args.Template.MaxTokens,
+		Model:       a.args.Model,
+		Messages:    messages,
+		Temperature: a.args.Temperature,
+		MaxTokens:   a.args.Template.MaxTokens,
 	})
 	if err != nil {
 		rec.SetError(err, time.Since(startTime))
@@ -930,10 +936,11 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		startTime := time.Now()
 
 		resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
-			Model:     a.args.Model,
-			Messages:  messages,
-			Tools:     a.args.MainToolDefs,
-			MaxTokens: a.args.Template.MaxTokens,
+			Model:       a.args.Model,
+			Messages:    messages,
+			Tools:       a.args.MainToolDefs,
+			Temperature: a.args.Temperature,
+			MaxTokens:   a.args.Template.MaxTokens,
 		})
 		duration := time.Since(startTime)
 		if err != nil {

@@ -163,6 +163,17 @@ jobs:
           # controlled rules into a base-config repo.
           rm -rf pr-head/.opencodereview/rule.json pr-head/.opencodereview/rules || true
 
+      - name: Stage trusted .gitignore (from base ref, not PR head)
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          # The diff provider reads repoDir/.gitignore when filtering parsed
+          # diffs. Copy the base ref's ignore rules over the PR-head checkout
+          # so a fork PR cannot hide changed files by adding patterns like
+          # `*.go` to its branch's .gitignore.
+          if [ -f .gitignore ]; then
+            cp .gitignore pr-head/.gitignore
+          fi
+
       - name: Run ensemble review (trusted binary + base config/rules + sandboxed PR data)
         if: steps.detect.outputs.present == 'true'
         working-directory: pr-head

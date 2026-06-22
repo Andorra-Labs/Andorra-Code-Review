@@ -166,7 +166,12 @@ func ensureArbiter(ext *AndorraExt) {
 func ensureDedup(ext *AndorraExt) {
 	ensureEnsemble(ext)
 	if ext.Ensemble.Dedup == nil {
-		ext.Ensemble.Dedup = &DedupConfig{}
+		// Seed the default booleans so tuning a threshold via `ocr config set`
+		// does not accidentally disable the same-path guard or exact-code boost.
+		ext.Ensemble.Dedup = &DedupConfig{
+			RequireSamePath:        true,
+			ExistingCodeExactBoost: true,
+		}
 	}
 }
 

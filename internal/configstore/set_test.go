@@ -95,6 +95,26 @@ func TestSetDedupAndOutput(t *testing.T) {
 	}
 }
 
+func TestSetDedupThresholdPreservesDefaults(t *testing.T) {
+	ext := &AndorraExt{}
+	if err := Set(ext, "ensemble.dedup.line_overlap_min_ratio", "0.6"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	d := ext.Ensemble.Dedup
+	if d == nil {
+		t.Fatal("Dedup nil")
+	}
+	if d.LineOverlapMinRatio != 0.6 {
+		t.Errorf("LineOverlapMinRatio=%v, want 0.6", d.LineOverlapMinRatio)
+	}
+	if !d.RequireSamePath {
+		t.Errorf("RequireSamePath=false, want true")
+	}
+	if !d.ExistingCodeExactBoost {
+		t.Errorf("ExistingCodeExactBoost=false, want true")
+	}
+}
+
 func TestSetDefaultVerdictsJSONArray(t *testing.T) {
 	ext := &AndorraExt{}
 	if err := Set(ext, "ensemble.output.default_verdicts", `["accepted_bug","style_only"]`); err != nil {
