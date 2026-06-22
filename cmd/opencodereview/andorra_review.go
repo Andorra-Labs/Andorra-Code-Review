@@ -157,9 +157,10 @@ func parseCSV(s string) []string {
 // dispatch() before runReview(). Any config with at least one ENABLED
 // ensemble scanner routes to the ensemble path — even if the arbiter is
 // missing — so that runAndorraReview surfaces a clear validation error
-// rather than silently falling back to single-model review. Configs whose
-// scanners are all marked enabled:false fall through to legacy so users
-// can suspend ensemble reviews without deleting their saved definitions.
+// rather than silently falling back to single-model review. Legacy
+// top-level provider/model configs are auto-promoted to a one-scanner
+// ensemble so the dedup + arbiter pipeline runs by default. Users can still
+// force legacy mode with --no-ensemble.
 func shouldRunEnsemble(args []string) bool {
 	eopts, _ := splitEnsembleArgs(args)
 	if eopts.forceLegacy {
@@ -185,10 +186,16 @@ func shouldRunEnsemble(args []string) bool {
 		}
 		return false
 	}
-	if ext == nil || ext.Ensemble == nil {
+	if ext != nil && ext.Ensemble != nil && configstore.CountEnabledScanners(ext.Ensemble.Scanners) > 0 {
+		return true
+	}
+	// Auto-promote legacy single-provider configs to ensemble so the
+	// dedup + arbiter pipeline runs by default.
+	appCfg, err := LoadAppConfig(path)
+	if err != nil {
 		return false
 	}
-	return configstore.CountEnabledScanners(ext.Ensemble.Scanners) > 0
+	return appCfg != nil && appCfg.Provider != "" && appCfg.Model != ""
 }
 
 // isRepoLocalConfigPath reports whether path is the discovered repo-local
@@ -325,6 +332,30 @@ func runAndorraReview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load ensemble config: %w", err)
 	}
+
+	// Auto-promote legacy single-provider configs to a one-scanner ensemble.
+	// This makes the dedup + arbiter pipeline the default even when the user
+	// only configured the top-level provider/model.
+	hasExplicitEnsemble := ext != nil && ext.Ensemble != nil && configstore.CountEnabledScanners(ext.Ensemble.Scanners) > 0
+	if !hasExplicitEnsemble && appCfg != nil && appCfg.Provider != "" && appCfg.Model != "" {
+		if ext == nil {
+			ext = &configstore.AndorraExt{}
+		}
+		scannerName := appCfg.Provider
+		if scannerName == "" {
+			scannerName = "default"
+		}
+		ext.Ensemble = &configstore.EnsembleConfig{
+			Scanners: []configstore.ScannerSpec{
+				{Name: scannerName, Provider: appCfg.Provider, Model: appCfg.Model},
+			},
+			Arbiter: &configstore.ArbiterSpec{
+				Provider: appCfg.Provider,
+				Model:    appCfg.Model,
+			},
+		}
+	}
+
 	if ext == nil || ext.Ensemble == nil {
 		return fmt.Errorf("ensemble mode requested but no ensemble config present in %s", cfgPath)
 	}
@@ -392,9 +423,10 @@ func runAndorraReview(args []string) error {
 	}
 
 	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, []agent.AgentWarning, error) {
-		iterations := sep.Spec.Iterations
-		if iterations < 1 {
-			iterations = 1
+		const exhaustiveSafetyCap = 100
+		maxIters := 1
+		if sep.Spec.Exhaustive {
+			maxIters = exhaustiveSafetyCap
 		}
 		fr := &tool.FileReader{
 			RepoDir: repoDir,
@@ -414,7 +446,8 @@ func runAndorraReview(args []string) error {
 			allWarnings []agent.AgentWarning
 			totalUsage  finding.TokenUsage
 		)
-		for iter := 0; iter < iterations; iter++ {
+		dedupCfg := dedup.FromConfigStore(ext.Ensemble.Dedup)
+		for iter := 0; iter < maxIters; iter++ {
 			client := buildClient(sep.Endpoint, sep.Spec.Bedrock)
 			collector := tool.NewCommentCollector()
 			tools := buildToolRegistry(collector, fr)
@@ -457,7 +490,26 @@ func runAndorraReview(args []string) error {
 			}
 			// Resolve line numbers per-iteration so the LlmComment ranges are valid.
 			comments = diff.ResolveLineNumbers(comments, ag.Diffs())
+
+			if iter == 0 && len(comments) == 0 && sep.Spec.Exhaustive {
+				// First pass found nothing; no point running additional passes.
+				break
+			}
+			if iter > 0 && sep.Spec.Exhaustive {
+				if !hasNewFindings(allComments, comments, sep, dedupCfg) {
+					fmt.Fprintf(stdout.Writer(), "[ocr] Exhaustive scanner %q produced no new findings on iteration %d; stopping.\n", sep.Spec.Name, iter+1)
+					break
+				}
+			}
+
 			allComments = append(allComments, comments...)
+
+			if !sep.Spec.Exhaustive {
+				break
+			}
+			if iter == maxIters-1 {
+				fmt.Fprintf(stdout.Writer(), "[ocr] Exhaustive scanner %q reached safety cap of %d iterations.\n", sep.Spec.Name, maxIters)
+			}
 		}
 		return allComments, totalUsage, allWarnings, nil
 	}
@@ -653,6 +705,26 @@ func appendPriorFindingsContext(background string, prior []model.LlmComment) str
 		fmt.Fprintf(&b, "- [%s:%d-%d] %s\n", path, c.StartLine, c.EndLine, title)
 	}
 	return b.String()
+}
+
+// hasNewFindings reports whether `next` contains any finding that does not
+// merge with a finding already in `prior`. It uses the same dedup heuristic
+// the arbiter will use later, so an exhaustive scanner stops as soon as an
+// iteration only produces duplicates of issues found in earlier passes.
+func hasNewFindings(prior, next []model.LlmComment, sep ensemble.ScannerEndpoint, cfg dedup.Config) bool {
+	if len(next) == 0 {
+		return false
+	}
+	src := finding.Source{
+		Scanner:  sep.Spec.Name,
+		Provider: sep.Spec.Provider,
+		Model:    sep.Endpoint.Model,
+	}
+	priorRaw := finding.FromComments(prior, src)
+	nextRaw := finding.FromComments(next, src)
+	groupsPrior := dedup.Group(priorRaw, cfg)
+	groupsCombined := dedup.Group(append(priorRaw, nextRaw...), cfg)
+	return len(groupsCombined) > len(groupsPrior)
 }
 
 func printEnsembleUsage() {

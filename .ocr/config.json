@@ -19,7 +19,7 @@
         "name": "spark",
         "provider": "Spark",
         "model": "Qwen3.6-27B-Text-NVFP4-MTP",
-        "iterations": 3
+        "exhaustive": true
       }
     ],
     "arbiter": {

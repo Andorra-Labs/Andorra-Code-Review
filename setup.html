@@ -364,7 +364,7 @@
 
 <div class="panel">
   <h2>Ensemble <span style="color:var(--text-dim);font-weight:400;font-size:14px">(optional)</span></h2>
-  <p class="hint">Fan out the review to one or more scanners. Add multiple scanners (or bump iterations on a single scanner) to get parallel/iterative coverage; the arbiter dedupes and classifies findings before they're rendered.</p>
+  <p class="hint">Fan out the review to one or more scanners. Enable <strong>Exhaustive</strong> on a scanner to keep re-running it until no new findings are found; the arbiter dedupes and classifies findings before they're rendered.</p>
   <div class="row">
     <label style="text-transform:none;font-size:13px;color:var(--text);font-weight:400;display:flex;align-items:center;gap:8px">
       <input type="checkbox" id="ensembleSerial"> Run scanners serially (one agent at a time)
@@ -444,7 +444,7 @@ const state = {
   activeModel: "",
   ensemble: {
     serial: false,
-    scanners: [],        // [{ id, name, provider, model, iterations }]
+    scanners: [],        // [{ id, name, provider, model, exhaustive }]
     arbiter: { provider: "", model: "", mode: "" },
   },
 };
@@ -784,7 +784,7 @@ function addScanner(seed) {
     name: "",
     provider: "",
     model: "",
-    iterations: 0,
+    exhaustive: false,
   }, seed || {});
   state.ensemble.scanners.push(s);
   renderEnsemble();
@@ -836,15 +836,16 @@ function scannerRow(s) {
         <select data-field="model"></select>
       </div>
       <div>
-        <label title="Run this scanner N independent times; arbiter dedupes. Each extra pass sees the prior pass's findings.">Iterations</label>
-        <input type="number" data-field="iterations" min="0" step="1" placeholder="1">
+        <label style="text-transform:none;font-size:13px;color:var(--text);font-weight:400;display:flex;align-items:center;gap:8px" title="Keep re-running this scanner until an iteration produces no new findings. Prior passes' findings are passed forward so the model does not re-report them.">
+          <input type="checkbox" data-field="exhaustive"> Exhaustive
+        </label>
       </div>
     </div>
   `;
   row.querySelector('[data-field="name"]').value = s.name;
   populateProviderSelect(row.querySelector('[data-field="provider"]'), s.provider);
   populateModelSelect(row.querySelector('[data-field="model"]'), s.provider, s.model);
-  row.querySelector('[data-field="iterations"]').value = s.iterations || "";
+  row.querySelector('[data-field="exhaustive"]').checked = !!s.exhaustive;
 
   row.querySelector('[data-act="remove"]').addEventListener("click", () => removeScanner(s.id));
   row.querySelector('[data-field="name"]').addEventListener("input", (e) => {
@@ -861,9 +862,8 @@ function scannerRow(s) {
     s.model = e.target.value;
     scheduleRender();
   });
-  row.querySelector('[data-field="iterations"]').addEventListener("input", (e) => {
-    const v = parseInt(e.target.value, 10);
-    s.iterations = Number.isFinite(v) && v > 0 ? v : 0;
+  row.querySelector('[data-field="exhaustive"]').addEventListener("change", (e) => {
+    s.exhaustive = !!e.target.checked;
     scheduleRender();
   });
   return row;
@@ -984,7 +984,7 @@ function buildConfig() {
         }
         const entry = { name, provider: s.provider };
         if (s.model) entry.model = s.model;
-        if (s.iterations && s.iterations > 1) entry.iterations = s.iterations;
+        if (s.exhaustive) entry.exhaustive = true;
         return entry;
       });
     }
@@ -1199,7 +1199,7 @@ function importConfig(cfg) {
           name: s.name || "",
           provider: s.provider || "",
           model: s.model || "",
-          iterations: Number.isFinite(s.iterations) ? s.iterations : 0,
+          exhaustive: !!s.exhaustive,
         });
       }
     }
