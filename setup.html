@@ -191,6 +191,16 @@
 <p class="tagline">Generate a <code class="inline">config.json</code> for the <code class="inline">ocr</code> CLI without typing config-set commands.</p>
 
 <div class="panel">
+  <h2>Import existing config <span style="color:var(--text-dim);font-weight:400;font-size:14px">(optional)</span></h2>
+  <p class="hint">Already have <code class="inline">~/.opencodereview/config.json</code>? Load it to edit and re-export.</p>
+  <div class="actions" style="margin-top:0">
+    <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+    <button class="secondary" id="importBtn" type="button">Choose config.json…</button>
+    <span id="importStatus" style="color:var(--text-dim);font-size:13px"></span>
+  </div>
+</div>
+
+<div class="panel">
   <h2>Provider</h2>
   <p class="hint">Pick a built-in provider or supply a custom OpenAI/Anthropic-compatible endpoint.</p>
 
@@ -389,6 +399,58 @@ $("downloadBtn").addEventListener("click", () => {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+});
+
+const BUILTIN_PROVIDERS = new Set(Object.keys(DEFAULT_MODELS));
+
+function importConfig(cfg) {
+  if (!cfg || typeof cfg !== "object") throw new Error("not an object");
+  const providerName = cfg.provider;
+  if (!providerName) throw new Error("missing 'provider' field");
+
+  if (BUILTIN_PROVIDERS.has(providerName)) {
+    setMode("builtin");
+    $("builtinProvider").value = providerName;
+    const entry = (cfg.providers && cfg.providers[providerName]) || {};
+    $("builtinModel").value = entry.model || cfg.model || DEFAULT_MODELS[providerName] || "";
+    if (entry.model || cfg.model) $("builtinModel").dataset.touched = "1";
+    $("builtinApiKey").value = entry.api_key || "";
+  } else {
+    const entry = (cfg.custom_providers && cfg.custom_providers[providerName]) || {};
+    setMode("custom");
+    $("customName").value = providerName;
+    $("customProtocol").value = entry.protocol === "anthropic" ? "anthropic" : "openai";
+    $("customUrl").value = entry.url || "";
+    $("customModel").value = entry.model || "";
+    $("customApiKey").value = entry.api_key || "";
+  }
+  render();
+}
+
+$("importBtn").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const status = $("importStatus");
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const cfg = JSON.parse(reader.result);
+      importConfig(cfg);
+      status.style.color = "var(--success)";
+      status.textContent = `Loaded ${file.name} (provider: ${cfg.provider})`;
+    } catch (err) {
+      status.style.color = "#f85149";
+      status.textContent = `Could not load ${file.name}: ${err.message}`;
+    }
+  };
+  reader.onerror = () => {
+    status.style.color = "#f85149";
+    status.textContent = `Could not read ${file.name}`;
+  };
+  reader.readAsText(file);
+  // Reset the input so re-selecting the same file fires change again.
+  e.target.value = "";
 });
 
 $("copyBtn").addEventListener("click", async () => {
