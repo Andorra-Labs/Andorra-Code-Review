@@ -924,8 +924,16 @@ function buildConfig() {
     if (emitScanners) {
       // Default a scanner's name to its provider (sanitized, lowercased) when
       // the user left the field blank. Validate rejects empty / duplicate
-      // names, so we also disambiguate collisions with a numeric suffix.
+      // names, so we run two passes: first reserve every EXPLICIT name in the
+      // form so a default never silently steals an identifier the user typed
+      // later; then fill in defaults for blanks, disambiguating collisions
+      // among themselves with a numeric suffix.
+      const kept = e.scanners.filter((s) => s.name || s.provider || s.model);
       const usedNames = new Set();
+      for (const s of kept) {
+        const explicit = (s.name || "").trim();
+        if (explicit) usedNames.add(explicit);
+      }
       const defaultName = (s) => {
         const base = (s.provider || "scanner")
           .toLowerCase()
@@ -937,16 +945,20 @@ function buildConfig() {
         }
         return name;
       };
-      ens.scanners = e.scanners
-        .filter((s) => s.name || s.provider || s.model)
-        .map((s) => {
-          const name = (s.name || "").trim() || defaultName(s);
+      ens.scanners = kept.map((s) => {
+        const explicit = (s.name || "").trim();
+        let name;
+        if (explicit) {
+          name = explicit;
+        } else {
+          name = defaultName(s);
           usedNames.add(name);
-          const entry = { name, provider: s.provider };
-          if (s.model) entry.model = s.model;
-          if (s.iterations && s.iterations > 1) entry.iterations = s.iterations;
-          return entry;
-        });
+        }
+        const entry = { name, provider: s.provider };
+        if (s.model) entry.model = s.model;
+        if (s.iterations && s.iterations > 1) entry.iterations = s.iterations;
+        return entry;
+      });
     }
     if (e.arbiter.provider || e.arbiter.model || e.arbiter.mode) {
       ens.arbiter = { provider: e.arbiter.provider };
