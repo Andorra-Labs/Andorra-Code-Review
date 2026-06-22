@@ -56,7 +56,14 @@ type RawFinding struct {
 	Severity       string  `json:"severity,omitempty"`
 	Confidence     float64 `json:"confidence,omitempty"`
 	Thinking       string  `json:"thinking,omitempty"`
-	RawIndex       int     `json:"-"`
+	// ExplicitTitle reports whether Title came from the LLM's title field
+	// or was synthesized from the first line of Content. Synthesized titles
+	// stay populated so dedup's title-similarity match keeps working, but
+	// they must NOT be re-rendered as a bold header in the PR comment —
+	// the header would duplicate the first line of Content. ToComment uses
+	// this flag to gate LlmComment.Title propagation.
+	ExplicitTitle bool `json:"explicit_title,omitempty"`
+	RawIndex      int  `json:"-"`
 }
 
 // Finding is a post-dedup group. GroupID is unique within a single review run

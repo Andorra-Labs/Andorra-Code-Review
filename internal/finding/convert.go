@@ -8,11 +8,15 @@ import (
 )
 
 // FromComment converts an upstream LlmComment into a RawFinding tagged with the
-// given scanner source. Title prefers the LLM-supplied c.Title; when absent it
-// falls back to the first non-empty line of Content (capped at 120 chars).
+// given scanner source. Title prefers the LLM-supplied c.Title (and sets
+// ExplicitTitle = true); when absent it falls back to the first non-empty line
+// of Content (capped at 120 chars) with ExplicitTitle = false, so dedup's
+// title-similarity match still works but ToComment knows not to surface the
+// synthesized title as a duplicate header.
 // Detail is the full Content.
 func FromComment(c model.LlmComment, src Source, idx int) RawFinding {
 	title := strings.TrimSpace(c.Title)
+	explicit := title != ""
 	if title == "" {
 		title = extractTitle(c.Content)
 	}
@@ -21,6 +25,7 @@ func FromComment(c model.LlmComment, src Source, idx int) RawFinding {
 		StartLine:      c.StartLine,
 		EndLine:        c.EndLine,
 		Title:          title,
+		ExplicitTitle:  explicit,
 		Detail:         c.Content,
 		ExistingCode:   c.ExistingCode,
 		SuggestionCode: c.SuggestionCode,
@@ -82,15 +87,38 @@ func ToComment(f FinalFinding, opts RenderOptions) model.LlmComment {
 		ExistingCode:   existing,
 		StartLine:      f.StartLine,
 		EndLine:        f.EndLine,
-		Title:          f.Title,
+		Title:          pickExplicitTitle(f.Finding),
 		Severity:       pickSeverity(f.Finding),
 	}
 }
 
-// pickSeverity returns the severity reported by the highest-confidence member
-// that supplied one. When no member set severity, returns "". Mismatched
-// severities across scanners are resolved by confidence rather than worst-case
-// because arbiter dedup already filtered to the same underlying issue.
+// pickExplicitTitle returns the highest-confidence LLM-supplied title across
+// the Finding's members, or "" if no member supplied one. Synthesized titles
+// (extracted from Content's first line) are deliberately excluded so the PR
+// renderer doesn't prefix a bold header that duplicates the comment body.
+func pickExplicitTitle(f Finding) string {
+	var best *RawFinding
+	for i := range f.Members {
+		m := &f.Members[i]
+		if !m.ExplicitTitle {
+			continue
+		}
+		if best == nil || m.Confidence > best.Confidence {
+			best = m
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return best.Title
+}
+
+// pickSeverity returns one of the member-supplied severities for the group.
+// Strategy: highest confidence wins; on confidence ties (including the common
+// case where every member reports confidence 0 because scanners don't fill it
+// in), the WORST severity wins (P1 > P2 > P3). Without the rank tie-breaker
+// the result would be order-dependent — a P3-tagged member running first
+// could shadow a P1 from another scanner.
 func pickSeverity(f Finding) string {
 	if len(f.Members) == 0 {
 		return ""
@@ -101,7 +129,15 @@ func pickSeverity(f Finding) string {
 		if m.Severity == "" {
 			continue
 		}
-		if best == nil || m.Confidence > best.Confidence {
+		if best == nil {
+			best = m
+			continue
+		}
+		if m.Confidence > best.Confidence {
+			best = m
+			continue
+		}
+		if m.Confidence == best.Confidence && severityRank(m.Severity) < severityRank(best.Severity) {
 			best = m
 		}
 	}
@@ -109,6 +145,21 @@ func pickSeverity(f Finding) string {
 		return ""
 	}
 	return best.Severity
+}
+
+// severityRank maps a severity string to an integer ordering where LOWER
+// means worse (P1=1, P2=2, P3=3). Unknown / unset values sort last (99) so
+// they never win a tie-break against a known severity.
+func severityRank(s string) int {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "P1":
+		return 1
+	case "P2":
+		return 2
+	case "P3":
+		return 3
+	}
+	return 99
 }
 
 func combineDetail(f Finding) string {
