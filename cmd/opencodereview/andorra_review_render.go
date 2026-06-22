@@ -8,11 +8,23 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/open-code-review/open-code-review/internal/agent"
 	"github.com/open-code-review/open-code-review/internal/configstore"
 	"github.com/open-code-review/open-code-review/internal/ensemble"
 	"github.com/open-code-review/open-code-review/internal/finding"
 	"github.com/open-code-review/open-code-review/internal/model"
 )
+
+// aggregateWarnings flattens per-scanner warnings into one slice so the text
+// renderer surfaces partially-failed scanner runs the same way upstream
+// runReview surfaces Agent warnings.
+func aggregateWarnings(res ensemble.Result) []agent.AgentWarning {
+	var out []agent.AgentWarning
+	for _, sr := range res.Scanners {
+		out = append(out, sr.Warnings...)
+	}
+	return out
+}
 
 // buildDiffMap builds the path->diff lookup the arbiter uses for evidence.
 func buildDiffMap(diffs []model.Diff) map[string]string {
@@ -113,9 +125,10 @@ func ensembleSummary(res ensemble.Result, finals []finding.FinalFinding) string 
 
 // ensembleJSON is the JSON envelope appended to upstream output for ensemble runs.
 type ensembleJSON struct {
-	Status   string              `json:"status"`
-	Comments []model.LlmComment  `json:"comments"`
-	Ensemble *ensembleJSONReport `json:"ensemble,omitempty"`
+	Status   string                `json:"status"`
+	Comments []model.LlmComment    `json:"comments"`
+	Warnings []agent.AgentWarning  `json:"warnings,omitempty"`
+	Ensemble *ensembleJSONReport   `json:"ensemble,omitempty"`
 }
 
 type ensembleJSONReport struct {
@@ -134,6 +147,7 @@ func outputEnsembleJSON(comments []model.LlmComment, res ensemble.Result, finals
 	env := ensembleJSON{
 		Status:   "ok",
 		Comments: comments,
+		Warnings: aggregateWarnings(res),
 		Ensemble: &ensembleJSONReport{
 			Scanners:      res.Scanners,
 			Groups:        finals,

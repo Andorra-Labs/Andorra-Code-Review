@@ -89,6 +89,17 @@ func (b *BedrockClient) CompletionsWithCtx(ctx context.Context, req ChatRequest)
 // buildBedrockBody constructs Bedrock's Anthropic-shaped request body. The
 // shape is documented at
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
+// and the tool-use turn shape at
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.html
+//
+// The encoder normalizes OpenAI-style tool turns into Anthropic-on-Bedrock
+// content blocks:
+//   - assistant messages with ToolCalls become content arrays of
+//     [{type:"text"}, {type:"tool_use", id, name, input}]
+//   - role="tool" + ToolCallID result messages become user-role content
+//     [{type:"tool_result", tool_use_id, content}]
+// Without this, multi-round tool-use loops (file_read, code_search,
+// code_comment) fail past the first round on Bedrock scanners.
 func buildBedrockBody(req ChatRequest) ([]byte, error) {
 	type bedrockTool struct {
 		Name        string         `json:"name"`
@@ -111,17 +122,53 @@ func buildBedrockBody(req ChatRequest) ([]byte, error) {
 		body["temperature"] = *req.Temperature
 	}
 
-	// Bedrock takes system as a top-level string, not as a message role.
 	var systemParts []string
 	msgs := make([]bedrockMsg, 0, len(req.Messages))
 	for _, m := range req.Messages {
-		if m.Role == "system" {
+		switch {
+		case m.Role == "system":
 			if s, ok := m.Content.(string); ok && s != "" {
 				systemParts = append(systemParts, s)
 			}
-			continue
+		case m.Role == "tool" || m.ToolCallID != "":
+			// OpenAI-style tool-result message → Anthropic user/tool_result block.
+			msgs = append(msgs, bedrockMsg{
+				Role: "user",
+				Content: []map[string]any{{
+					"type":         "tool_result",
+					"tool_use_id":  m.ToolCallID,
+					"content":      m.ExtractText(),
+				}},
+			})
+		case m.Role == "assistant" && len(m.ToolCalls) > 0:
+			// Assistant tool-use turn: emit a content array carrying any text
+			// the model returned alongside the tool_use blocks. Bedrock requires
+			// the assistant turn to use blocks (not a string) when tool_use
+			// is present.
+			blocks := []map[string]any{}
+			if text := m.ExtractText(); text != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": text})
+			}
+			for _, tc := range m.ToolCalls {
+				var input any
+				if tc.Function.Arguments == "" {
+					input = map[string]any{}
+				} else if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+					// Pass the raw string if it isn't valid JSON; Bedrock will
+					// surface the schema error rather than us silently dropping it.
+					input = tc.Function.Arguments
+				}
+				blocks = append(blocks, map[string]any{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Function.Name,
+					"input": input,
+				})
+			}
+			msgs = append(msgs, bedrockMsg{Role: "assistant", Content: blocks})
+		default:
+			msgs = append(msgs, bedrockMsg{Role: m.Role, Content: m.Content})
 		}
-		msgs = append(msgs, bedrockMsg{Role: m.Role, Content: m.Content})
 	}
 	if len(systemParts) > 0 {
 		body["system"] = strings.Join(systemParts, "\n\n")

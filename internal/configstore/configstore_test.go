@@ -268,7 +268,7 @@ func TestValidateRejectsEnabledWithoutScanners(t *testing.T) {
 		t.Fatal("expected errors")
 	}
 	joined := joinErrs(errs)
-	if !strings.Contains(joined, "at least 2 scanners") {
+	if !strings.Contains(joined, "at least 2 enabled scanners") {
 		t.Errorf("missing scanner-count error: %s", joined)
 	}
 	if !strings.Contains(joined, "arbiter") {

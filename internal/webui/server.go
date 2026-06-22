@@ -207,6 +207,13 @@ func mergeHiddenFields(ext, prior *configstore.AndorraExt) {
 			ext.Ensemble.Arbiter.MaxTokens = prior.Ensemble.Arbiter.MaxTokens
 		}
 	}
+	// Dedup booleans aren't exposed by the form. Without merging, tuning a
+	// threshold would silently disable RequireSamePath / ExistingCodeExactBoost
+	// (their zero values), changing grouping semantics on every save.
+	if ext.Ensemble.Dedup != nil && prior.Ensemble.Dedup != nil {
+		ext.Ensemble.Dedup.RequireSamePath = prior.Ensemble.Dedup.RequireSamePath
+		ext.Ensemble.Dedup.ExistingCodeExactBoost = prior.Ensemble.Dedup.ExistingCodeExactBoost
+	}
 }
 
 func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {

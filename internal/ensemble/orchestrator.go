@@ -11,9 +11,11 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/open-code-review/open-code-review/internal/agent"
 	"github.com/open-code-review/open-code-review/internal/configstore"
 	"github.com/open-code-review/open-code-review/internal/finding"
 	"github.com/open-code-review/open-code-review/internal/llm"
@@ -34,10 +36,12 @@ type ArbiterEndpoint struct {
 }
 
 // RunScannerFunc executes one scanner against the shared review target and
-// returns its raw comments plus the token spend for that scanner's run.
-// Errors are scanner-scoped — the orchestrator records them but does not
-// abort the whole run on a single failure.
-type RunScannerFunc func(ctx context.Context, sep ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error)
+// returns its raw comments, token spend, any non-fatal warnings the Agent
+// recorded (e.g. per-file subtask failures), and a hard error if the scanner
+// as a whole could not produce anything. Errors are scanner-scoped — the
+// orchestrator records them but does not abort the whole run on a single
+// failure.
+type RunScannerFunc func(ctx context.Context, sep ScannerEndpoint) (comments []model.LlmComment, usage finding.TokenUsage, warnings []agent.AgentWarning, err error)
 
 // Orchestrator owns the scanner fan-out. Construct one per review run.
 type Orchestrator struct {
@@ -57,6 +61,7 @@ type ScannerResult struct {
 	Findings int
 	Duration time.Duration
 	Tokens   finding.TokenUsage
+	Warnings []agent.AgentWarning
 }
 
 // Result is the orchestrator's full output for a review run.
@@ -100,7 +105,7 @@ func (o *Orchestrator) Execute(ctx context.Context) (Result, error) {
 			defer func() { <-sem }()
 
 			start := time.Now()
-			comments, tokens, err := o.Run(ctx, sep)
+			comments, tokens, warnings, err := o.Run(ctx, sep)
 			dur := time.Since(start)
 
 			src := finding.Source{
@@ -111,6 +116,19 @@ func (o *Orchestrator) Execute(ctx context.Context) (Result, error) {
 			raws := finding.FromComments(comments, src)
 			rawPerScanner[i] = raws
 
+			// Tag scanner name onto each warning so the final aggregate makes
+			// it clear which scanner skipped which file.
+			tagged := make([]agent.AgentWarning, len(warnings))
+			for j, w := range warnings {
+				if w.Type == "" {
+					w.Type = "scanner_warning"
+				}
+				if !strings.HasPrefix(w.Message, "["+sep.Spec.Name+"] ") {
+					w.Message = "[" + sep.Spec.Name + "] " + w.Message
+				}
+				tagged[j] = w
+			}
+
 			res := ScannerResult{
 				Name:     sep.Spec.Name,
 				Provider: sep.Spec.Provider,
@@ -118,6 +136,7 @@ func (o *Orchestrator) Execute(ctx context.Context) (Result, error) {
 				Findings: len(raws),
 				Duration: dur,
 				Tokens:   tokens,
+				Warnings: tagged,
 			}
 			switch {
 			case err == nil:

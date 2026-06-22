@@ -333,7 +333,7 @@ func runAndorraReview(args []string) error {
 		perScannerConcurrency = 1
 	}
 
-	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
+	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, []agent.AgentWarning, error) {
 		client := buildClient(sep.Endpoint, sep.Spec.Bedrock)
 		collector := tool.NewCommentCollector()
 		fr := &tool.FileReader{
@@ -378,12 +378,13 @@ func runAndorraReview(args []string) error {
 			CacheReadTokens:  ag.TotalCacheReadTokens(),
 			CacheWriteTokens: ag.TotalCacheWriteTokens(),
 		}
+		warnings := ag.Warnings()
 		if err != nil {
-			return comments, usage, err
+			return comments, usage, warnings, err
 		}
 		// Resolve line numbers per-scanner so the LlmComment ranges are valid.
 		comments = diff.ResolveLineNumbers(comments, ag.Diffs())
-		return comments, usage, nil
+		return comments, usage, warnings, nil
 	}
 
 	orch := &ensemble.Orchestrator{
@@ -475,7 +476,7 @@ func runAndorraReview(args []string) error {
 		return outputEnsembleJSON(comments, result, finals, arbiterUsage, tokenRows, duration)
 	}
 	fmt.Fprintln(os.Stderr, ensembleSummary(result, finals))
-	outputTextWithWarnings(comments, nil)
+	outputTextWithWarnings(comments, aggregateWarnings(result))
 	fmt.Fprintln(os.Stderr, renderTokenGrid(tokenRows))
 	if eopts.debugTrace != "" {
 		if err := writeDebugTrace(eopts.debugTrace, result, finals); err != nil {
