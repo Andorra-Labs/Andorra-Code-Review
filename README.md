@@ -147,7 +147,40 @@ ocr config set llm.model claude-opus-4-6
 ocr config set llm.use_anthropic true
 ```
 
-Config is stored in `~/.opencodereview/config.json`.
+Config is stored in `config.json` inside the `.opencodereview` directory in your home folder:
+
+| OS | Path |
+|---|---|
+| macOS / Linux | `~/.opencodereview/config.json` |
+| Windows | `%USERPROFILE%\.opencodereview\config.json` |
+
+If the directory doesn't exist yet, `ocr config set ...` will create it on first use.
+
+**Option B′ (no install): generate the file with [setup.html](setup.html)**
+
+If you'd rather not run `ocr config set` commands one at a time, open [`setup.html`](setup.html) from this repo in any browser (no server needed). Pick a provider, paste your API key, click **Download config.json**, and drop the file at the path in the table above. The page can also **Import** an existing `config.json` to edit and re-export.
+
+**Config schema** — `config.json` is a JSON object with these top-level fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `provider` | string | Name of the active provider (built-in id like `anthropic`/`openai`, or a key from `custom_providers`). |
+| `model` | string | Optional global model id. Provider-specific `providers.<name>.model` takes precedence. |
+| `providers` | object | Per-built-in-provider settings. See provider entry fields below. |
+| `custom_providers` | object | Same shape as `providers`, but each entry requires `url` + `protocol`. |
+| `llm` | object | Legacy single-endpoint config (`url` / `auth_token` / `auth_header` / `model` / `use_anthropic` / `extra_body`). Used when `provider` is unset. |
+
+Each entry in `providers` / `custom_providers` supports:
+
+| Field | Type | Description |
+|---|---|---|
+| `api_key` | string | API key sent in the auth header (saved in plaintext — restrict file permissions). |
+| `url` | string | Base URL. Required for `custom_providers`; ignored for built-in providers (they have built-in URLs). |
+| `protocol` | string | `"openai"` or `"anthropic"`. Required for `custom_providers`. |
+| `model` | string | Model id. Required if no top-level `model` is set. |
+| `models` | string[] | Optional list of model ids to expose in `ocr config model`. |
+| `auth_header` | string | Override the auth header name. `"x-api-key"` or `"authorization"` (alias `bearer`). |
+| `extra_body` | object | Extra JSON merged into the request body (e.g. `{ "enable_thinking": false }`). |
 
 **`auth_header` (optional):** Controls which HTTP header carries the API key when using Anthropic. Defaults to `authorization` (Bearer token) if omitted. If you use a standard `sk-ant-*` API key, you must set it to `x-api-key`:
 
