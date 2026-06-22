@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-code-review/open-code-review/internal/configstore"
+	"github.com/open-code-review/open-code-review/internal/dedup"
+	"github.com/open-code-review/open-code-review/internal/ensemble"
+	"github.com/open-code-review/open-code-review/internal/llm"
 	"github.com/open-code-review/open-code-review/internal/model"
 )
 
@@ -42,5 +46,46 @@ func TestAppendPriorFindingsContext_BlankBackgroundOmitsLeadingNewlines(t *testi
 	got := appendPriorFindingsContext("   ", prior)
 	if strings.HasPrefix(got, "\n") {
 		t.Errorf("should not start with newline when background is blank: %q", got)
+	}
+}
+
+func testScannerEndpoint() ensemble.ScannerEndpoint {
+	return ensemble.ScannerEndpoint{
+		Spec:     configstore.ScannerSpec{Name: "test", Provider: "openai"},
+		Endpoint: llm.ResolvedEndpoint{Model: "gpt-test"},
+	}
+}
+
+func TestHasNewFindings_EmptyPriorReturnsTrueForAnyNext(t *testing.T) {
+	sep := testScannerEndpoint()
+	next := []model.LlmComment{{Path: "a.go", StartLine: 1, EndLine: 1, Content: "bug"}}
+	if !hasNewFindings(nil, next, sep, dedup.Default()) {
+		t.Error("expected new findings when prior is empty")
+	}
+}
+
+func TestHasNewFindings_EmptyNextReturnsFalse(t *testing.T) {
+	sep := testScannerEndpoint()
+	prior := []model.LlmComment{{Path: "a.go", StartLine: 1, EndLine: 1, Content: "bug"}}
+	if hasNewFindings(prior, nil, sep, dedup.Default()) {
+		t.Error("expected no new findings when next is empty")
+	}
+}
+
+func TestHasNewFindings_DuplicateNextReturnsFalse(t *testing.T) {
+	sep := testScannerEndpoint()
+	prior := []model.LlmComment{{Path: "a.go", StartLine: 1, EndLine: 1, Content: "bug"}}
+	next := []model.LlmComment{{Path: "a.go", StartLine: 1, EndLine: 1, Content: "same bug"}}
+	if hasNewFindings(prior, next, sep, dedup.Default()) {
+		t.Error("expected duplicate finding not to count as new")
+	}
+}
+
+func TestHasNewFindings_NewFindingReturnsTrue(t *testing.T) {
+	sep := testScannerEndpoint()
+	prior := []model.LlmComment{{Path: "a.go", StartLine: 1, EndLine: 1, Content: "bug"}}
+	next := []model.LlmComment{{Path: "b.go", StartLine: 5, EndLine: 5, Content: "different bug"}}
+	if !hasNewFindings(prior, next, sep, dedup.Default()) {
+		t.Error("expected different finding to count as new")
 	}
 }
