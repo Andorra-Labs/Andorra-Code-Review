@@ -236,54 +236,65 @@ jobs:
           cat /tmp/ocr-result.json || true
 
       - name: Post OCR review to PR
-        if: always() && steps.ocr-run.outcome != 'skipped'
-        env:
-          OCR_EXIT_CODE: ${{ steps.ocr-run.outputs.ocr_exit_code }}
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const prNumber = context.payload.pull_request?.number || context.issue.number;
             const commitSha = context.payload.pull_request?.head?.sha || '${{ steps.pr-context.outputs.head_sha }}';
-            const ocrExitCode = process.env.OCR_EXIT_CODE || '';
-            const stderr = fs.existsSync('/tmp/ocr-stderr.log') ? fs.readFileSync('/tmp/ocr-stderr.log', 'utf8') : '';
+            const ocrExitCode = '${{ steps.ocr-run.outputs.ocr_exit_code }}';
+
+            let stderr = '';
+            try { stderr = fs.readFileSync('/tmp/ocr-stderr.log', 'utf8'); } catch (_) { /* missing */ }
 
             function failureHeader(reason) {
               let header = `OpenCodeReview ${reason}.`;
-              if (ocrExitCode && ocrExitCode !== '0') header += ` (exit code: ${ocrExitCode})`;
+              if (ocrExitCode && /^\d+$/.test(ocrExitCode) && ocrExitCode !== '0') {
+                header += ` (exit code: ${ocrExitCode})`;
+              }
               return header;
             }
 
+            function errorBody(reason) {
+              let body = failureHeader(reason);
+              if (stderr.trim()) {
+                const trimmed = stderr.slice(0, 6000);
+                body += `\n\n${safeFence(trimmed)}\n${trimmed}\n${safeFence(trimmed)}`;
+              }
+              return body;
+            }
+
+            let raw = '';
+            try { raw = fs.readFileSync('/tmp/ocr-result.json', 'utf8').trim(); } catch (_) { /* missing */ }
+
             let parsed = {};
+            if (!raw) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: errorBody('produced no output')
+              });
+              return;
+            }
             try {
-              const raw = fs.existsSync('/tmp/ocr-result.json')
-                ? fs.readFileSync('/tmp/ocr-result.json', 'utf8').trim()
-                : '';
-              if (!raw) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: prNumber,
-                  body: `${failureHeader('produced no output')}\n\n${stderr.slice(0, 6000)}`
-                });
-                return;
-              }
               parsed = JSON.parse(raw);
-              if (!parsed || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: prNumber,
-                  body: `${failureHeader('produced empty output')}\n\n${stderr.slice(0, 6000)}`
-                });
-                return;
-              }
             } catch (e) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: prNumber,
-                body: `${failureHeader('failed to parse output')}\n\n${stderr.slice(0, 6000)}`
+                body: errorBody('failed to parse output')
+              });
+              return;
+            }
+            if (!parsed || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: errorBody('produced empty output')
               });
               return;
             }
@@ -347,11 +358,30 @@ jobs:
                 body: summary,
                 comments: inlineComments
               });
-            } catch (e) {
-              let body = `${summary}\n\nCould not post inline comments: ${e.message}\n`;
-              for (const c of comments) {
-                const line = c.end_line || c.start_line || c.line || '?';
-                body += `\n---\n\n${c.path || 'unknown file'}:${line}\n\n${formatComment(c)}\n`;
+            } catch (bulkErr) {
+              // Bulk review failed (often one bad line position rejects the
+              // whole batch). Retry each inline comment individually so valid
+              // ones still land at their code location; collect failures.
+              const failedInline = [];
+              for (const ic of inlineComments) {
+                try {
+                  await github.rest.pulls.createReview({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: prNumber,
+                    commit_id: commitSha,
+                    event: 'COMMENT',
+                    body: '',
+                    comments: [ic]
+                  });
+                } catch (indErr) {
+                  failedInline.push({ inline: ic, error: indErr.message });
+                }
+              }
+
+              let body = `${summary}\n\nCould not post inline comments: ${bulkErr.message}\n`;
+              for (const item of failedInline) {
+                body += `\n---\n\n${item.inline.path || 'unknown file'}:${item.inline.line || '?'}\n\n${item.inline.body}\n`;
               }
               const MAX_LENGTH = 65000;
               if (body.length > MAX_LENGTH) {
