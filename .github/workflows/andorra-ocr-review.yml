@@ -117,6 +117,15 @@ jobs:
         with:
           go-version: '1.25'
 
+      - name: Connect to Tailscale (so the runner can reach *.ts.net hosts
+              like the Spark LLM endpoint configured in .ocr/config.json)
+        if: steps.detect.outputs.present == 'true'
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: Install Andorra Review from the fork's main branch
         if: steps.detect.outputs.present == 'true'
         env:
@@ -200,13 +209,16 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         working-directory: pr-head
         env:
-          # Names match what `ocr config export --placeholder-secrets` wrote
-          # into .ocr/config.json. Edit for your providers.
-          OCR_ANTHROPIC_API_KEY: ${{ secrets.OCR_ANTHROPIC_API_KEY }}
-          OCR_OPENAI_API_KEY:    ${{ secrets.OCR_OPENAI_API_KEY }}
-          OCR_BEDROCK_API_KEY:   ${{ secrets.OCR_BEDROCK_API_KEY }}
-          OCR_BEDROCK_REGION:    ${{ secrets.OCR_BEDROCK_REGION }}
+          # Forward the whole secrets blob so the run script can derive
+          # OCR_<UPPER_PROVIDER>_API_KEY for each provider referenced in
+          # .ocr/config.json. Hardcoding one env entry per provider here
+          # would force a workflow edit every time a new provider lands;
+          # toJSON(secrets) lets us match the OCR resolver's runtime
+          # naming convention (see internal/configstore/export.go's
+          # envForProviderKey) without us caring which providers exist.
+          ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
+          set -euo pipefail
           # Build --rule arg only when the base ref committed a rule file;
           # otherwise OCR uses its built-in defaults and ignores any
           # PR-head .opencodereview/rule.json (because --rule, when set,
@@ -215,6 +227,54 @@ jobs:
           if [ -n "${TRUSTED_RULE_PATH:-}" ]; then
             rule_arg=(--rule "${TRUSTED_RULE_PATH}")
           fi
+
+          # Collect every provider name referenced by the base-ref config:
+          # top-level `provider`, each ensemble scanner's provider, the
+          # arbiter's provider, plus every key under `custom_providers`.
+          # We read the config from the BASE ref (../.ocr/config.json from
+          # pr-head/), not from PR head, so a fork PR can't introduce new
+          # provider names to harvest extra secrets here.
+          mapfile -t providers < <(
+            jq -r '
+              [
+                (.provider // empty),
+                (.ensemble.arbiter.provider // empty),
+                (.ensemble.scanners // [])[].provider,
+                (.custom_providers // {} | keys[])
+              ] | map(select(. != null and . != ""))
+                | unique[]
+            ' ../.ocr/config.json
+          )
+
+          # For each provider, derive OCR_<UPPER>_API_KEY following the
+          # same sanitization OCR's runtime uses, then pull the value
+          # from the secrets JSON and export it.
+          for p in "${providers[@]}"; do
+            upper=$(printf '%s' "$p" | tr '[:lower:]' '[:upper:]' \
+              | sed 's/[^A-Z0-9_]/_/g; s/__*/_/g; s/^_*//; s/_*$//')
+            [ -z "$upper" ] && upper=PROVIDER
+            var_name="OCR_${upper}_API_KEY"
+            value=$(printf '%s' "$ALL_SECRETS_JSON" \
+              | jq -r --arg k "$var_name" '.[$k] // empty')
+            if [ -n "$value" ]; then
+              # Mask the value in any subsequent log line that echoes it,
+              # then export so the OCR child process inherits it.
+              echo "::add-mask::$value"
+              export "${var_name}=${value}"
+            fi
+          done
+
+          # OCR_BEDROCK_REGION is the one non-key env var the resolver
+          # expects; pull it from the same blob so users keeping Bedrock
+          # configs don't need a special-case workflow entry.
+          region=$(printf '%s' "$ALL_SECRETS_JSON" \
+            | jq -r '.OCR_BEDROCK_REGION // empty')
+          if [ -n "$region" ]; then
+            export OCR_BEDROCK_REGION="$region"
+          fi
+          # Don't leak the JSON blob to the child process.
+          unset ALL_SECRETS_JSON
+
           opencodereview review \
             --ensemble \
             --config ../.ocr/config.json \
