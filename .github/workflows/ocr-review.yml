@@ -288,7 +288,7 @@ jobs:
                 if (parsed.message) body += `${parsed.message}\n\n`;
                 if (Array.isArray(parsed.warnings) && parsed.warnings.length > 0) {
                   body += `Warnings:\n`;
-                  for (const w of parsed.warnings) body += `- ${w}\n`;
+                  for (const w of parsed.warnings) body += `- ${formatWarning(w)}\n`;
                   body += '\n';
                 }
               }
@@ -319,6 +319,15 @@ jobs:
             }
 
             let summary = `OpenCodeReview found ${comments.length} actionable issue(s).\n\n`;
+            if (parsed.status === 'completed_with_errors') {
+              summary += `⚠️ OCR status: **${parsed.status}**\n\n`;
+              if (parsed.message) summary += `${parsed.message}\n\n`;
+              if (Array.isArray(parsed.warnings) && parsed.warnings.length > 0) {
+                summary += `Warnings:\n`;
+                for (const w of parsed.warnings) summary += `- ${formatWarning(w)}\n`;
+                summary += '\n';
+              }
+            }
             summary += `- ${inlineComments.length} inline comment(s)\n`;
             summary += `- ${summaryOnly.length} summary comment(s)\n\n`;
             summary += filterDebug;
@@ -367,11 +376,14 @@ jobs:
               const text = getCommentText(c);
               const normalized = { ...c };
               const current = String(c.severity || c.priority || c.level || '').toUpperCase();
+              // Only infer severity from explicit labels for actionable severities.
+              // Never infer P3 (low) from arbitrary prose words like "style" that
+              // can appear in otherwise-dangerous findings, because that would
+              // filter them out before hasDangerSignal runs.
               if (!current) {
                 if (/\b(P0|CRITICAL|BLOCKER)\b/i.test(text)) normalized.severity = 'P0';
                 else if (/\b(P1|HIGH|MAJOR)\b/i.test(text)) normalized.severity = 'P1';
                 else if (/\b(P2|MEDIUM|MINOR)\b/i.test(text)) normalized.severity = 'P2';
-                else if (/\b(P3|LOW|NIT|STYLE|INFO)\b/i.test(text)) normalized.severity = 'P3';
               }
               return normalized;
             }
@@ -459,6 +471,27 @@ jobs:
               let body = c.content || c.message || c.body || JSON.stringify(c, null, 2);
               const severity = c.severity || c.priority || c.level;
               if (severity && !body.toLowerCase().includes(String(severity).toLowerCase())) body = `Severity: ${severity}\n\n${body}`;
-              if (c.suggestion_code) body += `\n\nSuggestion:\n\`\`\`suggestion\n${c.suggestion_code}\n\`\`\``;
+              if (c.suggestion_code) {
+                const fence = safeFence(c.suggestion_code);
+                body += `\n\nSuggestion:\n${fence}suggestion\n${c.suggestion_code}\n${fence}`;
+              }
               return body;
+            }
+
+            function safeFence(content) {
+              const matches = String(content || '').match(/`+/g) || [];
+              const maxTicks = matches.reduce((max, m) => Math.max(max, m.length), 0);
+              return '`'.repeat(Math.max(3, maxTicks + 1));
+            }
+
+            function formatWarning(w) {
+              if (typeof w === 'string') return w;
+              if (w && typeof w === 'object') {
+                const parts = [];
+                if (w.file) parts.push(`**${w.file}**`);
+                if (w.type) parts.push(`(${w.type})`);
+                if (w.message) parts.push(w.message);
+                return parts.join(' ');
+              }
+              return String(w);
             }
