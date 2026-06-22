@@ -112,6 +112,10 @@ type Args struct {
 	// template phases (plan/memory_compression) don't specify one.
 	Model string
 
+	// Temperature is an optional per-agent sampling temperature passed to every
+	// LLM chat request. When nil, the provider default is used.
+	Temperature *float64
+
 	// GitRunner limits the total number of concurrent git subprocesses.
 	// When nil, subprocesses are spawned without a global limit.
 	GitRunner *gitcmd.Runner
@@ -119,6 +123,12 @@ type Args struct {
 	// Session is an optional session history instance for collecting conversation records.
 	// When nil, a default one is created automatically with git branch auto-detected from repoDir.
 	Session *session.SessionHistory
+
+	// PrecomputedDiffs lets a caller supply already-parsed diffs to avoid
+	// re-running `git diff` per Agent. When non-nil, loadDiffs uses these
+	// directly and skips the diff.Provider entirely. Used by the fork's
+	// ensemble orchestrator so N scanners share one parse.
+	PrecomputedDiffs []model.Diff
 }
 
 // AgentWarning describes a non-fatal warning recorded during review.
@@ -365,6 +375,15 @@ func (a *Agent) recordWarning(warningType, file, message string) {
 
 // loadDiffs populates the diff-related fields.
 func (a *Agent) loadDiffs(ctx context.Context) error {
+	if a.args.PrecomputedDiffs != nil {
+		a.diffs = a.args.PrecomputedDiffs
+		for i := range a.diffs {
+			d := &a.diffs[i]
+			a.totalInsertions += d.Insertions
+			a.totalDeletions += d.Deletions
+		}
+		return nil
+	}
 	var provider *diff.Provider
 
 	switch {
@@ -625,9 +644,10 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	startTime := time.Now()
 
 	resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
-		Model:     a.args.Model,
-		Messages:  messages,
-		MaxTokens: a.args.Template.MaxTokens,
+		Model:       a.args.Model,
+		Messages:    messages,
+		Temperature: a.args.Temperature,
+		MaxTokens:   a.args.Template.MaxTokens,
 	})
 	if err != nil {
 		rec.SetError(err, time.Since(startTime))
@@ -836,9 +856,10 @@ func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFi
 	startTime := time.Now()
 
 	resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
-		Model:     a.args.Model,
-		Messages:  messages,
-		MaxTokens: a.args.Template.MaxTokens,
+		Model:       a.args.Model,
+		Messages:    messages,
+		Temperature: a.args.Temperature,
+		MaxTokens:   a.args.Template.MaxTokens,
 	})
 	if err != nil {
 		rec.SetError(err, time.Since(startTime))
@@ -915,10 +936,11 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		startTime := time.Now()
 
 		resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
-			Model:     a.args.Model,
-			Messages:  messages,
-			Tools:     a.args.MainToolDefs,
-			MaxTokens: a.args.Template.MaxTokens,
+			Model:       a.args.Model,
+			Messages:    messages,
+			Tools:       a.args.MainToolDefs,
+			Temperature: a.args.Temperature,
+			MaxTokens:   a.args.Template.MaxTokens,
 		})
 		duration := time.Since(startTime)
 		if err != nil {

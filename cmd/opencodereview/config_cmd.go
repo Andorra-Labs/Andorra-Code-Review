@@ -26,6 +26,10 @@ func runConfig(args []string) error {
 		return nil
 	}
 
+	if handled, err := andorraConfig(args); handled {
+		return err
+	}
+
 	switch args[0] {
 	case "provider":
 		if len(args) != 1 {
