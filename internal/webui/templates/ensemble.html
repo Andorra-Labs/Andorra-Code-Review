@@ -4,14 +4,6 @@
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 
     <fieldset>
-      <legend>General</legend>
-      <label>
-        <input type="checkbox" name="enabled" value="true" {{if .E.Enabled}}checked{{end}}>
-        Enable ensemble mode (requires ≥2 scanners + an arbiter)
-      </label>
-    </fieldset>
-
-    <fieldset>
       <legend>Scanners</legend>
       <p class="hint">Each scanner must point at a provider configured in your upstream config (presets like <code>anthropic</code>, <code>openai</code> work out of the box).</p>
       <table id="scanners-table">

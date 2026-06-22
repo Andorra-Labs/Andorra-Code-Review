@@ -32,9 +32,19 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# Per-PR concurrency: a new push (synchronize) cancels any in-flight
+# review against the prior commit, so stale runs can't post review
+# comments after a newer run finishes.
+concurrency:
+  group: andorra-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
+  # issues: write covers the createComment fallback the post-review step
+  # uses when createReview fails or there are no inline comments to attach.
+  issues: write
   actions: read
 
 jobs:
@@ -80,7 +90,11 @@ jobs:
           # Attach token to both remotes via http.extraheader so fetches from
           # private fork repos succeed. Restrict the header to github.com hosts
           # so we never send the token to a non-GitHub URL.
-          AUTH_HDR="AUTHORIZATION: bearer ${GH_TOKEN}"
+          # GitHub's git HTTPS endpoint expects HTTP Basic auth with the
+          # token as the password, mirroring what actions/checkout does
+          # (https://github.com/actions/checkout/blob/main/src/git-auth-helper.ts).
+          BASIC_CRED="$(printf '%s' "x-access-token:${GH_TOKEN}" | base64 -w0)"
+          AUTH_HDR="AUTHORIZATION: basic ${BASIC_CRED}"
           git config "http.https://github.com/.extraheader" "${AUTH_HDR}"
 
           git remote add origin "${HEAD_REPO_URL}"
@@ -103,22 +117,25 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Install Andorra Review from a pinned fork release
+      - name: Install Andorra Review from the fork's main branch
         if: steps.detect.outputs.present == 'true'
         env:
-          # SECURITY: ANDORRA_OCR_REF must be an IMMUTABLE ref — a release
-          # tag or a full commit SHA. Branch names (including 'main') are
-          # mutable: anyone who can push to that branch can change what
-          # trusted code runs here with secrets. The guard below rejects
-          # obviously-mutable refs at runtime.
-          # Update the value below when you adopt a new fork release.
+          # SECURITY TRADEOFF: ANDORRA_OCR_REF points at `main` so newest
+          # pushes are picked up automatically. Because this workflow runs
+          # under `pull_request_target` with secret access, anyone with
+          # push to `main` can change what trusted code runs here with
+          # those secrets. This is acceptable for a same-team fork where
+          # everyone with push to `main` is already trusted; switch back
+          # to a pinned release tag or commit SHA if that assumption ever
+          # stops holding.
           ANDORRA_OCR_REPO: https://github.com/Andorra-Labs/Andorra-Code-Review.git
-          ANDORRA_OCR_REF: REPLACE_WITH_RELEASE_TAG_OR_COMMIT_SHA
+          ANDORRA_OCR_REF: main
         run: |
-          # Hard fail if the operator hasn't pinned an immutable ref.
+          # Reject empty/placeholder refs but allow `main` per the
+          # security tradeoff documented above.
           case "${ANDORRA_OCR_REF}" in
-            ""|main|master|develop|trunk|HEAD|REPLACE_*)
-              echo "::error::ANDORRA_OCR_REF (${ANDORRA_OCR_REF:-empty}) is mutable. Pin a release tag like v0.1.0 or a full 40-char commit SHA."
+            ""|REPLACE_*)
+              echo "::error::ANDORRA_OCR_REF (${ANDORRA_OCR_REF:-empty}) is unset. Set it to a branch name, release tag, or 40-char commit SHA."
               exit 1
               ;;
           esac

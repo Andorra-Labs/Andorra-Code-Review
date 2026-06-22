@@ -5,16 +5,14 @@ import (
 	"testing"
 )
 
-func TestSetEnabled(t *testing.T) {
+func TestSetEnabledRejected(t *testing.T) {
 	ext := &AndorraExt{}
-	if err := Set(ext, "ensemble.enabled", "true"); err != nil {
-		t.Fatalf("Set: %v", err)
+	err := Set(ext, "ensemble.enabled", "true")
+	if err == nil {
+		t.Fatal("expected error for ensemble.enabled")
 	}
-	if ext.Ensemble == nil || !ext.Ensemble.Enabled {
-		t.Errorf("Enabled = false")
-	}
-	if err := Set(ext, "ensemble.enabled", "notabool"); err == nil {
-		t.Error("expected error for bad bool")
+	if !strings.Contains(err.Error(), "no longer supported") {
+		t.Errorf("error did not mention deprecation: %v", err)
 	}
 }
 
@@ -137,7 +135,7 @@ func TestSetRejectsNonEnsembleKey(t *testing.T) {
 }
 
 func TestSetNilExt(t *testing.T) {
-	if err := Set(nil, "ensemble.enabled", "true"); err == nil {
+	if err := Set(nil, "ensemble.scanners", "[]"); err == nil {
 		t.Error("expected error for nil ext")
 	}
 }
@@ -173,9 +171,6 @@ func TestSetEnsembleSaveRoundTrip(t *testing.T) {
 	ext, err := LoadAndorra(path)
 	if err != nil {
 		t.Fatalf("LoadAndorra: %v", err)
-	}
-	if err := Set(ext, "ensemble.enabled", "true"); err != nil {
-		t.Fatalf("Set: %v", err)
 	}
 	if err := Set(ext, "ensemble.scanners",
 		`[{"name":"a","provider":"anthropic"},{"name":"b","provider":"openai"}]`); err != nil {
