@@ -8,12 +8,15 @@
   :root {
     --bg: #0d1117;
     --panel: #161b22;
+    --panel-2: #1c2129;
     --border: #30363d;
+    --border-strong: #484f58;
     --text: #c9d1d9;
     --text-dim: #8b949e;
     --accent: #58a6ff;
     --accent-strong: #1f6feb;
     --success: #3fb950;
+    --danger: #f85149;
     --warning: #d29922;
     --code-bg: #0b0f14;
   }
@@ -26,7 +29,7 @@
     line-height: 1.5;
   }
   .wrap {
-    max-width: 880px;
+    max-width: 920px;
     margin: 0 auto;
     padding: 32px 24px 80px;
   }
@@ -51,6 +54,12 @@
     font-size: 18px;
     font-weight: 600;
   }
+  .panel h3 {
+    margin: 20px 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
   .panel .hint {
     color: var(--text-dim);
     font-size: 14px;
@@ -58,64 +67,146 @@
   }
   label {
     display: block;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-dim);
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-  input[type="text"], input[type="password"], select {
+  input[type="text"], input[type="password"], input[type="url"], select {
     width: 100%;
     background: var(--code-bg);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text);
     font: inherit;
-    font-size: 14px;
-    padding: 9px 12px;
+    font-size: 13px;
+    padding: 8px 11px;
   }
   input:focus, select:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(88,166,255,0.2);
   }
-  .row { margin-bottom: 14px; }
+  .row { margin-bottom: 12px; }
   .row:last-child { margin-bottom: 0; }
-  .grid-2 {
+  /* Provider card */
+  .provider-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .provider-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 14px;
+    gap: 12px;
   }
-  @media (max-width: 600px) {
-    .grid-2 { grid-template-columns: 1fr; }
+  .provider-grid-3 {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 12px;
   }
-  .toggle-row {
+  @media (max-width: 640px) {
+    .provider-grid, .provider-grid-3 { grid-template-columns: 1fr; }
+  }
+  .model-list {
     display: flex;
-    gap: 8px;
-    margin-bottom: 14px;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+    margin-bottom: 8px;
   }
-  .toggle-row button {
-    flex: 1;
+  .model-chip {
     background: var(--code-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 3px 8px 3px 10px;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .model-chip button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+  }
+  .model-chip button:hover { color: var(--danger); }
+  .icon-btn {
+    background: transparent;
     border: 1px solid var(--border);
     color: var(--text-dim);
     border-radius: 6px;
-    padding: 9px 12px;
+    width: 28px;
+    height: 28px;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn:hover { color: var(--danger); border-color: var(--danger); }
+  .row-actions {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+  }
+  /* Worker rows */
+  .worker-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 28px;
+    gap: 10px;
+    align-items: end;
+    margin-bottom: 10px;
+  }
+  /* Mode switch */
+  .mode-switch {
+    display: inline-flex;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  .mode-switch button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 8px 16px;
     font: inherit;
-    font-size: 14px;
+    font-size: 13px;
     cursor: pointer;
   }
-  .toggle-row button.active {
+  .mode-switch button.active {
     background: var(--accent-strong);
-    border-color: var(--accent);
     color: white;
   }
-  .actions {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    margin-top: 16px;
+  /* Buttons */
+  button.add-btn {
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--text-dim);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    width: 100%;
+  }
+  button.add-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
   button.primary {
     background: var(--success);
@@ -138,6 +229,13 @@
     cursor: pointer;
   }
   button.secondary:hover { border-color: var(--accent); }
+  .actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
   pre {
     background: var(--code-bg);
     border: 1px solid var(--border);
@@ -145,9 +243,10 @@
     padding: 16px;
     color: var(--text);
     font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-    font-size: 13px;
+    font-size: 12px;
     overflow-x: auto;
     margin: 12px 0 0;
+    max-height: 480px;
   }
   code.inline {
     background: var(--code-bg);
@@ -155,16 +254,8 @@
     border-radius: 4px;
     padding: 1px 6px;
     font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-    font-size: 13px;
+    font-size: 12px;
   }
-  .path-row {
-    display: grid;
-    grid-template-columns: 100px 1fr;
-    gap: 12px;
-    margin-bottom: 8px;
-    align-items: center;
-  }
-  .path-row strong { color: var(--text-dim); font-size: 13px; font-weight: 500; }
   .warning {
     background: rgba(210,153,34,0.1);
     border: 1px solid rgba(210,153,34,0.4);
@@ -174,6 +265,20 @@
     font-size: 13px;
     margin-top: 16px;
   }
+  .empty {
+    color: var(--text-dim);
+    font-size: 13px;
+    font-style: italic;
+    padding: 8px 0;
+  }
+  .path-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 12px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .path-row strong { color: var(--text-dim); font-size: 12px; font-weight: 500; }
   .footer {
     margin-top: 32px;
     color: var(--text-dim);
@@ -188,11 +293,11 @@
 <div class="wrap">
 
 <h1>OpenCodeReview Setup</h1>
-<p class="tagline">Generate a <code class="inline">config.json</code> for the <code class="inline">ocr</code> CLI without typing config-set commands.</p>
+<p class="tagline">Define LLM providers and assign models to scanners + an arbiter for multi-LLM review. Generates a <code class="inline">config.json</code> the <code class="inline">ocr</code> CLI can read.</p>
 
 <div class="panel">
   <h2>Import existing config <span style="color:var(--text-dim);font-weight:400;font-size:14px">(optional)</span></h2>
-  <p class="hint">Already have <code class="inline">~/.opencodereview/config.json</code>? Load it to edit and re-export.</p>
+  <p class="hint">Load an existing <code class="inline">config.json</code> to edit and re-export.</p>
   <div class="actions" style="margin-top:0">
     <input type="file" id="importFile" accept=".json,application/json" style="display:none">
     <button class="secondary" id="importBtn" type="button">Choose config.json…</button>
@@ -201,72 +306,41 @@
 </div>
 
 <div class="panel">
-  <h2>Provider</h2>
-  <p class="hint">Pick a built-in provider or supply a custom OpenAI/Anthropic-compatible endpoint.</p>
-
-  <div class="toggle-row">
-    <button id="modeBuiltin" class="active" type="button">Built-in</button>
-    <button id="modeCustom" type="button">Custom endpoint</button>
+  <h2>Providers</h2>
+  <p class="hint">Each provider is an endpoint (URL + protocol + key) and a list of model ids hosted there.</p>
+  <div id="providersList"></div>
+  <button class="add-btn" id="addProvider" type="button">+ Add provider</button>
+  <div class="warning">
+    API keys are saved in plaintext in the downloaded file. For CI use, leave the key blank here and set it as a repository or organization secret instead. For local use, <code class="inline">chmod 600 ~/.opencodereview/config.json</code> after saving.
   </div>
+</div>
 
-  <div id="builtinFields">
-    <div class="grid-2">
-      <div class="row">
-        <label for="builtinProvider">Provider</label>
-        <select id="builtinProvider">
-          <option value="anthropic">anthropic — api.anthropic.com</option>
-          <option value="openai">openai — api.openai.com</option>
-          <option value="deepseek">deepseek — api.deepseek.com</option>
-          <option value="kimi">kimi — api.moonshot.cn</option>
-          <option value="minimax">minimax — api.minimaxi.com</option>
-          <option value="mimo">mimo — api.xiaomimimo.com</option>
-          <option value="dashscope">dashscope — dashscope.aliyuncs.com</option>
-          <option value="dashscope-tokenplan">dashscope-tokenplan</option>
-          <option value="hy-tokenplan">hy-tokenplan — lkeap.cloud.tencent.com</option>
-          <option value="tencent-tokenhub">tencent-tokenhub</option>
-          <option value="volcengine">volcengine — ark.cn-beijing.volces.com</option>
-          <option value="z-ai">z-ai — open.bigmodel.cn</option>
-        </select>
-      </div>
-      <div class="row">
-        <label for="builtinModel">Model</label>
-        <input type="text" id="builtinModel" placeholder="e.g. claude-sonnet-4-6, gpt-4o, deepseek-chat">
-      </div>
-    </div>
-    <div class="row">
-      <label for="builtinApiKey">API key</label>
-      <input type="password" id="builtinApiKey" placeholder="sk-... (stored in plaintext in config.json)">
-    </div>
+<div class="panel">
+  <h2>Workers</h2>
+  <p class="hint">Pick which (provider, model) handles each role.</p>
+
+  <h3>Scanners</h3>
+  <p class="hint">Each scanner independently reviews the diff. Add multiple to compare or cross-check.</p>
+  <div class="mode-switch">
+    <button id="modeParallel" type="button" class="active">Parallel</button>
+    <button id="modeSerial" type="button">Serial (1 at a time)</button>
   </div>
+  <p class="hint" id="modeHint">All scanners run at once. Faster, but every scanner draws GPU/API quota concurrently.</p>
+  <div id="scannersList"></div>
+  <button class="add-btn" id="addScanner" type="button">+ Add scanner</button>
 
-  <div id="customFields" style="display:none">
-    <div class="grid-2">
-      <div class="row">
-        <label for="customName">Provider name (alias)</label>
-        <input type="text" id="customName" placeholder="my-gateway">
-      </div>
-      <div class="row">
-        <label for="customProtocol">Protocol</label>
-        <select id="customProtocol">
-          <option value="openai">openai</option>
-          <option value="anthropic">anthropic</option>
-        </select>
-      </div>
+  <h3>Arbiter</h3>
+  <p class="hint">Cross-checks scanner findings and produces the final review.</p>
+  <div class="worker-row" id="arbiterRow">
+    <div>
+      <label>Provider</label>
+      <select id="arbiterProvider"></select>
     </div>
-    <div class="row">
-      <label for="customUrl">Base URL</label>
-      <input type="url" id="customUrl" placeholder="https://gateway.internal.com/v1">
+    <div>
+      <label>Model</label>
+      <select id="arbiterModel"></select>
     </div>
-    <div class="grid-2">
-      <div class="row">
-        <label for="customModel">Model</label>
-        <input type="text" id="customModel" placeholder="llama-3-70b">
-      </div>
-      <div class="row">
-        <label for="customApiKey">API key</label>
-        <input type="password" id="customApiKey" placeholder="optional for internal endpoints">
-      </div>
-    </div>
+    <div></div>
   </div>
 </div>
 
@@ -278,14 +352,10 @@
     <button class="primary" id="downloadBtn" type="button">Download config.json</button>
     <button class="secondary" id="copyBtn" type="button">Copy to clipboard</button>
   </div>
-  <div class="warning">
-    The downloaded file contains your API key in plaintext. Move it to the path below and restrict permissions (<code class="inline">chmod 600 ~/.opencodereview/config.json</code> on macOS/Linux).
-  </div>
 </div>
 
 <div class="panel">
   <h2>Where to put it</h2>
-  <p class="hint">Save the downloaded file as <code class="inline">config.json</code> at:</p>
   <div class="path-row">
     <strong>macOS / Linux</strong>
     <code class="inline">~/.opencodereview/config.json</code>
@@ -299,7 +369,7 @@
 </div>
 
 <div class="footer">
-  Built for the <a href="https://github.com/Andorra-Labs/Andorra-Code-Review">Andorra-Code-Review</a> CLI.
+  Built for the <a href="https://github.com/Andorra-Labs/andorra-code-review">Andorra-Code-Review</a> CLI.
 </div>
 
 </div>
@@ -309,121 +379,388 @@
 
 const $ = (id) => document.getElementById(id);
 
-let mode = "builtin";
+/* ───── state ─────────────────────────────────────────────────────────── */
 
-$("modeBuiltin").addEventListener("click", () => setMode("builtin"));
-$("modeCustom").addEventListener("click", () => setMode("custom"));
+const state = {
+  providers: [],         // [{ id, name, url, protocol, api_key, models: [] }]
+  scanners: [],          // [{ id, provider, model }]
+  scanner_mode: "parallel",
+  arbiter: { provider: "", model: "" },
+};
 
-function setMode(next) {
-  mode = next;
-  $("modeBuiltin").classList.toggle("active", next === "builtin");
-  $("modeCustom").classList.toggle("active", next === "custom");
-  $("builtinFields").style.display = next === "builtin" ? "" : "none";
-  $("customFields").style.display = next === "custom" ? "" : "none";
+let nextId = 1;
+const uid = () => `id-${nextId++}`;
+
+function findProvider(name) {
+  return state.providers.find((p) => p.name === name);
+}
+
+function allProviderNames() {
+  return state.providers.map((p) => p.name).filter(Boolean);
+}
+
+/* ───── providers ─────────────────────────────────────────────────────── */
+
+function addProvider(seed) {
+  const p = Object.assign({
+    id: uid(),
+    name: "",
+    url: "",
+    protocol: "openai",
+    api_key: "",
+    models: [],
+  }, seed || {});
+  state.providers.push(p);
+  renderProviders();
+  refreshWorkerSelects();
   render();
 }
 
-// Suggest a sensible default model whenever the built-in provider changes.
-const DEFAULT_MODELS = {
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-4o",
-  deepseek: "deepseek-chat",
-  kimi: "moonshot-v1-32k",
-  minimax: "MiniMax-Text-01",
-  mimo: "mimo-7b-rl",
-  dashscope: "qwen3-max",
-  "dashscope-tokenplan": "qwen3-max",
-  "hy-tokenplan": "hunyuan-large",
-  "tencent-tokenhub": "hunyuan-large",
-  volcengine: "doubao-pro-32k",
-  "z-ai": "glm-4-plus",
-};
-
-$("builtinProvider").addEventListener("change", () => {
-  const def = DEFAULT_MODELS[$("builtinProvider").value];
-  if (def && !$("builtinModel").dataset.touched) {
-    $("builtinModel").value = def;
+function removeProvider(id) {
+  const removed = state.providers.find((p) => p.id === id);
+  state.providers = state.providers.filter((p) => p.id !== id);
+  // Clear any workers that pointed at this provider.
+  if (removed) {
+    state.scanners = state.scanners.map((s) =>
+      s.provider === removed.name ? { ...s, provider: "", model: "" } : s
+    );
+    if (state.arbiter.provider === removed.name) {
+      state.arbiter = { provider: "", model: "" };
+    }
   }
+  renderProviders();
+  renderScanners();
+  refreshWorkerSelects();
   render();
-});
-$("builtinModel").addEventListener("input", () => {
-  $("builtinModel").dataset.touched = "1";
-  render();
-});
-["builtinApiKey", "customName", "customProtocol", "customUrl", "customModel", "customApiKey"]
-  .forEach((id) => $(id).addEventListener("input", render));
+}
 
-// Seed the default model on first load.
-$("builtinModel").value = DEFAULT_MODELS[$("builtinProvider").value];
+function renderProviders() {
+  const list = $("providersList");
+  list.innerHTML = "";
+  if (state.providers.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No providers yet. Click “+ Add provider” below to start.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const p of state.providers) list.appendChild(providerCard(p));
+}
+
+function providerCard(p) {
+  const card = document.createElement("div");
+  card.className = "provider-card";
+  card.dataset.id = p.id;
+  card.innerHTML = `
+    <div class="row-actions">
+      <button class="icon-btn" data-act="remove" title="Remove provider">×</button>
+    </div>
+    <div class="provider-grid-3">
+      <div class="row">
+        <label>Name (alias)</label>
+        <input type="text" data-field="name" placeholder="anthropic-prod, openai-team-a, on-prem">
+      </div>
+      <div class="row">
+        <label>Protocol</label>
+        <select data-field="protocol">
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>API key (optional)</label>
+        <input type="password" data-field="api_key" placeholder="leave blank for env/secret">
+      </div>
+    </div>
+    <div class="row">
+      <label>Base URL</label>
+      <input type="url" data-field="url" placeholder="https://api.example.com/v1">
+    </div>
+    <div class="row">
+      <label>Models</label>
+      <div class="model-list" data-field="models"></div>
+      <input type="text" data-field="model-input" placeholder="Type a model id and press Enter (e.g. claude-sonnet-4-6)">
+    </div>
+  `;
+
+  // Hydrate fields.
+  card.querySelector('[data-field="name"]').value = p.name;
+  card.querySelector('[data-field="protocol"]').value = p.protocol;
+  card.querySelector('[data-field="api_key"]').value = p.api_key;
+  card.querySelector('[data-field="url"]').value = p.url;
+  renderModels(card, p);
+
+  // Wire events.
+  card.querySelector('[data-act="remove"]').addEventListener("click", () => removeProvider(p.id));
+  ["name", "url", "api_key"].forEach((field) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    el.addEventListener("input", () => {
+      const oldName = p.name;
+      p[field] = el.value;
+      if (field === "name") {
+        // Re-point workers that referenced the old name.
+        const newName = el.value;
+        for (const s of state.scanners) if (s.provider === oldName) s.provider = newName;
+        if (state.arbiter.provider === oldName) state.arbiter.provider = newName;
+        refreshWorkerSelects();
+      }
+      render();
+    });
+  });
+  card.querySelector('[data-field="protocol"]').addEventListener("change", (e) => {
+    p.protocol = e.target.value;
+    render();
+  });
+  const modelInput = card.querySelector('[data-field="model-input"]');
+  modelInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      const v = modelInput.value.trim();
+      if (v && !p.models.includes(v)) p.models.push(v);
+      modelInput.value = "";
+      renderModels(card, p);
+      refreshWorkerSelects();
+      render();
+    }
+  });
+
+  return card;
+}
+
+function renderModels(card, p) {
+  const list = card.querySelector('[data-field="models"]');
+  list.innerHTML = "";
+  for (const m of p.models) {
+    const chip = document.createElement("span");
+    chip.className = "model-chip";
+    chip.textContent = m;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.title = "Remove model";
+    x.addEventListener("click", () => {
+      p.models = p.models.filter((mm) => mm !== m);
+      renderModels(card, p);
+      refreshWorkerSelects();
+      render();
+    });
+    chip.appendChild(x);
+    list.appendChild(chip);
+  }
+}
+
+$("addProvider").addEventListener("click", () => addProvider());
+
+/* ───── scanners ──────────────────────────────────────────────────────── */
+
+function addScanner(seed) {
+  const s = Object.assign({ id: uid(), provider: "", model: "" }, seed || {});
+  state.scanners.push(s);
+  renderScanners();
+  render();
+}
+
+function removeScanner(id) {
+  state.scanners = state.scanners.filter((s) => s.id !== id);
+  renderScanners();
+  render();
+}
+
+function renderScanners() {
+  const list = $("scannersList");
+  list.innerHTML = "";
+  if (state.scanners.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No scanners yet. Click “+ Add scanner” below.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const s of state.scanners) list.appendChild(scannerRow(s));
+}
+
+function scannerRow(s) {
+  const row = document.createElement("div");
+  row.className = "worker-row";
+  row.innerHTML = `
+    <div>
+      <label>Provider</label>
+      <select data-field="provider"></select>
+    </div>
+    <div>
+      <label>Model</label>
+      <select data-field="model"></select>
+    </div>
+    <div>
+      <button class="icon-btn" data-act="remove" title="Remove scanner">×</button>
+    </div>
+  `;
+  populateProviderSelect(row.querySelector('[data-field="provider"]'), s.provider);
+  populateModelSelect(row.querySelector('[data-field="model"]'), s.provider, s.model);
+  row.querySelector('[data-field="provider"]').addEventListener("change", (e) => {
+    s.provider = e.target.value;
+    s.model = ""; // reset model when provider changes
+    populateModelSelect(row.querySelector('[data-field="model"]'), s.provider, "");
+    render();
+  });
+  row.querySelector('[data-field="model"]').addEventListener("change", (e) => {
+    s.model = e.target.value;
+    render();
+  });
+  row.querySelector('[data-act="remove"]').addEventListener("click", () => removeScanner(s.id));
+  return row;
+}
+
+$("addScanner").addEventListener("click", () => addScanner());
+
+/* Mode switch */
+function setMode(m) {
+  state.scanner_mode = m;
+  $("modeParallel").classList.toggle("active", m === "parallel");
+  $("modeSerial").classList.toggle("active", m === "serial");
+  $("modeHint").textContent = m === "parallel"
+    ? "All scanners run at once. Faster, but every scanner draws GPU/API quota concurrently."
+    : "Scanners run one at a time. Slower, but caps GPU/API load to a single model.";
+  render();
+}
+$("modeParallel").addEventListener("click", () => setMode("parallel"));
+$("modeSerial").addEventListener("click", () => setMode("serial"));
+
+/* ───── arbiter ───────────────────────────────────────────────────────── */
+
+function renderArbiter() {
+  populateProviderSelect($("arbiterProvider"), state.arbiter.provider);
+  populateModelSelect($("arbiterModel"), state.arbiter.provider, state.arbiter.model);
+}
+$("arbiterProvider").addEventListener("change", (e) => {
+  state.arbiter.provider = e.target.value;
+  state.arbiter.model = "";
+  populateModelSelect($("arbiterModel"), state.arbiter.provider, "");
+  render();
+});
+$("arbiterModel").addEventListener("change", (e) => {
+  state.arbiter.model = e.target.value;
+  render();
+});
+
+/* ───── shared select population ──────────────────────────────────────── */
+
+function populateProviderSelect(sel, current) {
+  sel.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = ""; opt0.textContent = "— pick a provider —";
+  sel.appendChild(opt0);
+  for (const name of allProviderNames()) {
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  sel.value = current || "";
+}
+
+function populateModelSelect(sel, providerName, current) {
+  sel.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = ""; opt0.textContent = providerName ? "— pick a model —" : "— pick a provider first —";
+  sel.appendChild(opt0);
+  const provider = findProvider(providerName);
+  if (provider) {
+    for (const m of provider.models) {
+      const opt = document.createElement("option");
+      opt.value = m; opt.textContent = m;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = current || "";
+}
+
+function refreshWorkerSelects() {
+  // Re-render scanners and arbiter so their dropdowns pick up new provider/model lists.
+  renderScanners();
+  renderArbiter();
+}
+
+/* ───── output ────────────────────────────────────────────────────────── */
 
 function buildConfig() {
-  const cfg = { providers: {}, llm: {} };
-
-  if (mode === "builtin") {
-    const provider = $("builtinProvider").value;
-    const model = $("builtinModel").value.trim();
-    const apiKey = $("builtinApiKey").value;
-    cfg.provider = provider;
-    cfg.providers[provider] = {};
-    if (apiKey) cfg.providers[provider].api_key = apiKey;
-    if (model) cfg.providers[provider].model = model;
-  } else {
-    const name = ($("customName").value.trim() || "custom");
-    const protocol = $("customProtocol").value;
-    const url = $("customUrl").value.trim();
-    const model = $("customModel").value.trim();
-    const apiKey = $("customApiKey").value;
-    cfg.provider = name;
-    cfg.custom_providers = {};
-    cfg.custom_providers[name] = { protocol };
-    if (url) cfg.custom_providers[name].url = url;
-    if (model) cfg.custom_providers[name].model = model;
-    if (apiKey) cfg.custom_providers[name].api_key = apiKey;
+  const cfg = { custom_providers: {}, workers: { scanners: [], scanner_mode: state.scanner_mode, arbiter: null } };
+  for (const p of state.providers) {
+    if (!p.name) continue;
+    const entry = { protocol: p.protocol };
+    if (p.url) entry.url = p.url;
+    if (p.api_key) entry.api_key = p.api_key;
+    if (p.models.length > 0) entry.models = [...p.models];
+    cfg.custom_providers[p.name] = entry;
   }
-
+  for (const s of state.scanners) {
+    if (!s.provider || !s.model) continue;
+    cfg.workers.scanners.push({ provider: s.provider, model: s.model });
+  }
+  if (state.arbiter.provider && state.arbiter.model) {
+    cfg.workers.arbiter = { provider: state.arbiter.provider, model: state.arbiter.model };
+    // Also set the top-level provider/model so the current CLI (which doesn't
+    // yet know about workers) still has a valid endpoint via the arbiter.
+    cfg.provider = state.arbiter.provider;
+    cfg.model = state.arbiter.model;
+  }
   return cfg;
 }
 
 function render() {
   $("preview").textContent = JSON.stringify(buildConfig(), null, 2);
 }
-render();
 
-$("downloadBtn").addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(buildConfig(), null, 2) + "\n"], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "config.json";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-});
-
-const BUILTIN_PROVIDERS = new Set(Object.keys(DEFAULT_MODELS));
+/* ───── import ────────────────────────────────────────────────────────── */
 
 function importConfig(cfg) {
   if (!cfg || typeof cfg !== "object") throw new Error("not an object");
-  const providerName = cfg.provider;
-  if (!providerName) throw new Error("missing 'provider' field");
 
-  if (BUILTIN_PROVIDERS.has(providerName)) {
-    setMode("builtin");
-    $("builtinProvider").value = providerName;
-    const entry = (cfg.providers && cfg.providers[providerName]) || {};
-    $("builtinModel").value = entry.model || cfg.model || DEFAULT_MODELS[providerName] || "";
-    if (entry.model || cfg.model) $("builtinModel").dataset.touched = "1";
-    $("builtinApiKey").value = entry.api_key || "";
-  } else {
-    const entry = (cfg.custom_providers && cfg.custom_providers[providerName]) || {};
-    setMode("custom");
-    $("customName").value = providerName;
-    $("customProtocol").value = entry.protocol === "anthropic" ? "anthropic" : "openai";
-    $("customUrl").value = entry.url || "";
-    $("customModel").value = entry.model || "";
-    $("customApiKey").value = entry.api_key || "";
+  // Reset state.
+  state.providers = [];
+  state.scanners = [];
+  state.scanner_mode = "parallel";
+  state.arbiter = { provider: "", model: "" };
+
+  const cp = (cfg.custom_providers && typeof cfg.custom_providers === "object") ? cfg.custom_providers : {};
+  // Also fold any legacy `providers.<name>` entries in so a CLI-managed
+  // config.json round-trips at least the keys we can represent.
+  const providers = (cfg.providers && typeof cfg.providers === "object") ? cfg.providers : {};
+  const merge = Object.assign({}, providers, cp);
+
+  for (const [name, raw] of Object.entries(merge)) {
+    if (!raw || typeof raw !== "object") continue;
+    state.providers.push({
+      id: uid(),
+      name,
+      url: raw.url || "",
+      protocol: raw.protocol === "anthropic" ? "anthropic" : "openai",
+      api_key: raw.api_key || "",
+      models: Array.isArray(raw.models) ? [...raw.models] : (raw.model ? [raw.model] : []),
+    });
   }
+
+  if (cfg.workers && typeof cfg.workers === "object") {
+    const w = cfg.workers;
+    if (Array.isArray(w.scanners)) {
+      for (const s of w.scanners) {
+        if (s && typeof s === "object") state.scanners.push({ id: uid(), provider: s.provider || "", model: s.model || "" });
+      }
+    }
+    if (w.scanner_mode === "serial" || w.scanner_mode === "parallel") state.scanner_mode = w.scanner_mode;
+    if (w.arbiter && typeof w.arbiter === "object") state.arbiter = { provider: w.arbiter.provider || "", model: w.arbiter.model || "" };
+  }
+
+  // Fall back: if no workers but cfg.provider is set, seed arbiter from it.
+  if (!state.arbiter.provider && cfg.provider) {
+    state.arbiter.provider = cfg.provider;
+    const matched = state.providers.find((p) => p.name === cfg.provider);
+    if (matched && cfg.model && matched.models.includes(cfg.model)) state.arbiter.model = cfg.model;
+  }
+
+  setMode(state.scanner_mode);
+  renderProviders();
+  renderScanners();
+  renderArbiter();
   render();
 }
 
@@ -438,19 +775,32 @@ $("importFile").addEventListener("change", (e) => {
       const cfg = JSON.parse(reader.result);
       importConfig(cfg);
       status.style.color = "var(--success)";
-      status.textContent = `Loaded ${file.name} (provider: ${cfg.provider})`;
+      status.textContent = `Loaded ${file.name}`;
     } catch (err) {
-      status.style.color = "#f85149";
+      status.style.color = "var(--danger)";
       status.textContent = `Could not load ${file.name}: ${err.message}`;
     }
   };
   reader.onerror = () => {
-    status.style.color = "#f85149";
+    status.style.color = "var(--danger)";
     status.textContent = `Could not read ${file.name}`;
   };
   reader.readAsText(file);
-  // Reset the input so re-selecting the same file fires change again.
   e.target.value = "";
+});
+
+/* ───── download / copy ───────────────────────────────────────────────── */
+
+$("downloadBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(buildConfig(), null, 2) + "\n"], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "config.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 });
 
 $("copyBtn").addEventListener("click", async () => {
@@ -460,10 +810,15 @@ $("copyBtn").addEventListener("click", async () => {
     const original = btn.textContent;
     btn.textContent = "Copied";
     setTimeout(() => (btn.textContent = original), 1500);
-  } catch (_) {
-    /* clipboard API may be blocked on file:// — fall back to manual select */
-  }
+  } catch (_) { /* clipboard API may be blocked on file:// */ }
 });
+
+/* ───── initial render ────────────────────────────────────────────────── */
+
+renderProviders();
+renderScanners();
+renderArbiter();
+render();
 </script>
 </body>
 </html>
