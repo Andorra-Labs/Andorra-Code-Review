@@ -124,23 +124,39 @@ func buildBedrockBody(req ChatRequest) ([]byte, error) {
 
 	var systemParts []string
 	msgs := make([]bedrockMsg, 0, len(req.Messages))
+
+	// flushPendingToolResults emits the buffered tool-result blocks as one
+	// user message. Bedrock's Anthropic flow requires the user turn that
+	// follows a multi-tool_use assistant turn to carry *all* corresponding
+	// tool_result blocks in a single content array — emitting one user
+	// message per tool result causes Bedrock to reject the request with
+	// "missing tool_result" on the next round.
+	var pending []map[string]any
+	flushPendingToolResults := func() {
+		if len(pending) == 0 {
+			return
+		}
+		blocks := pending
+		pending = nil
+		msgs = append(msgs, bedrockMsg{Role: "user", Content: blocks})
+	}
+
 	for _, m := range req.Messages {
 		switch {
 		case m.Role == "system":
+			flushPendingToolResults()
 			if s, ok := m.Content.(string); ok && s != "" {
 				systemParts = append(systemParts, s)
 			}
 		case m.Role == "tool" || m.ToolCallID != "":
-			// OpenAI-style tool-result message → Anthropic user/tool_result block.
-			msgs = append(msgs, bedrockMsg{
-				Role: "user",
-				Content: []map[string]any{{
-					"type":         "tool_result",
-					"tool_use_id":  m.ToolCallID,
-					"content":      m.ExtractText(),
-				}},
+			// Buffer; flushed when we hit a non-tool message or end-of-list.
+			pending = append(pending, map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     m.ExtractText(),
 			})
 		case m.Role == "assistant" && len(m.ToolCalls) > 0:
+			flushPendingToolResults()
 			// Assistant tool-use turn: emit a content array carrying any text
 			// the model returned alongside the tool_use blocks. Bedrock requires
 			// the assistant turn to use blocks (not a string) when tool_use
@@ -167,9 +183,11 @@ func buildBedrockBody(req ChatRequest) ([]byte, error) {
 			}
 			msgs = append(msgs, bedrockMsg{Role: "assistant", Content: blocks})
 		default:
+			flushPendingToolResults()
 			msgs = append(msgs, bedrockMsg{Role: m.Role, Content: m.Content})
 		}
 	}
+	flushPendingToolResults()
 	if len(systemParts) > 0 {
 		body["system"] = strings.Join(systemParts, "\n\n")
 	}

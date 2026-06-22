@@ -210,6 +210,73 @@ func TestBedrockClientEncodesToolTurnsAsContentBlocks(t *testing.T) {
 	}
 }
 
+func TestBedrockClientBatchesMultipleToolResultsIntoOneUserTurn(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := NewBedrockClient(ClientConfig{URL: srv.URL, APIKey: "x"})
+	_, err := c.CompletionsWithCtx(context.Background(), ChatRequest{
+		Model: "anthropic.claude-opus-4-1-v1:0",
+		Messages: []Message{
+			{Role: "user", Content: "read two files"},
+			// Assistant returns TWO tool_use blocks in one turn.
+			{
+				Role:    "assistant",
+				Content: "I'll read both.",
+				ToolCalls: []ToolCall{
+					{ID: "tu_1", Type: "function", Function: FunctionCall{Name: "file_read", Arguments: `{"file_path":"a.go"}`}},
+					{ID: "tu_2", Type: "function", Function: FunctionCall{Name: "file_read", Arguments: `{"file_path":"b.go"}`}},
+				},
+			},
+			// Two corresponding tool-result messages (upstream Agent emits one
+			// per tool call). Bedrock requires they be packed into a single
+			// user turn with both tool_result blocks in one content array.
+			NewToolResultMessage("tu_1", "content of a.go"),
+			NewToolResultMessage("tu_2", "content of b.go"),
+			{Role: "user", Content: "anything wrong?"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompletionsWithCtx: %v", err)
+	}
+
+	msgs := gotBody["messages"].([]any)
+	// Expect 4 messages: user(read two), assistant(2 tool_use), user(2 tool_result), user(anything wrong).
+	if len(msgs) != 4 {
+		t.Fatalf("messages len=%d, want 4 (got: %+v)", len(msgs), msgs)
+	}
+
+	// msgs[2] should be the merged tool-result user turn with both blocks.
+	tr := msgs[2].(map[string]any)
+	if tr["role"] != "user" {
+		t.Errorf("merged tool-result role=%v, want user", tr["role"])
+	}
+	blocks, ok := tr["content"].([]any)
+	if !ok {
+		t.Fatalf("tool-result content not a block array: %T", tr["content"])
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 tool_result blocks merged into one user turn, got %d: %+v", len(blocks), blocks)
+	}
+	ids := map[string]bool{}
+	for _, b := range blocks {
+		bm := b.(map[string]any)
+		if bm["type"] != "tool_result" {
+			t.Errorf("block type=%v, want tool_result", bm["type"])
+		}
+		ids[bm["tool_use_id"].(string)] = true
+	}
+	if !ids["tu_1"] || !ids["tu_2"] {
+		t.Errorf("missing tool_use_id in merged blocks: %v", ids)
+	}
+}
+
 func TestBedrockRegionFromURL(t *testing.T) {
 	cases := map[string]string{
 		"https://bedrock-runtime.us-east-1.amazonaws.com":     "us-east-1",

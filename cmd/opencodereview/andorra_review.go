@@ -332,6 +332,17 @@ func runAndorraReview(args []string) error {
 	if perScannerConcurrency < 1 {
 		perScannerConcurrency = 1
 	}
+	// Cap how many scanner goroutines run in parallel so that
+	// scannerFanOut × perScannerConcurrency never exceeds opts.concurrency.
+	// Without this cap, the orchestrator defaults to runtime.NumCPU() and
+	// blows past the requested budget even when per-scanner concurrency is 1.
+	scannerFanOut := opts.concurrency / perScannerConcurrency
+	if scannerFanOut < 1 {
+		scannerFanOut = 1
+	}
+	if scannerFanOut > len(scanners) {
+		scannerFanOut = len(scanners)
+	}
 
 	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, []agent.AgentWarning, error) {
 		client := buildClient(sep.Endpoint, sep.Spec.Bedrock)
@@ -388,9 +399,10 @@ func runAndorraReview(args []string) error {
 	}
 
 	orch := &ensemble.Orchestrator{
-		Scanners: scanners,
-		Arbiter:  arbiterEndpoint,
-		Run:      run,
+		Scanners:       scanners,
+		Arbiter:        arbiterEndpoint,
+		Run:            run,
+		MaxConcurrency: scannerFanOut,
 	}
 
 	// Silence progress output in agent / JSON mode the same way runReview does.

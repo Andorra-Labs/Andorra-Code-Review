@@ -66,18 +66,33 @@ jobs:
           # head.repo.clone_url is set even for forks. We treat the result as
           # data: the trusted OCR binary reads files but never executes them.
           HEAD_REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
+          BASE_REPO_URL: ${{ github.event.pull_request.base.repo.clone_url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # GITHUB_TOKEN authenticates the raw clone for PRs from PRIVATE forks.
+          # Public forks fetch fine without auth. The token is GitHub-issued and
+          # only read by git's local config inside pr-head/, never echoed.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git init pr-head
           cd pr-head
           git config advice.detachedHead false
+          # Attach token to both remotes via http.extraheader so fetches from
+          # private fork repos succeed. Restrict the header to github.com hosts
+          # so we never send the token to a non-GitHub URL.
+          AUTH_HDR="AUTHORIZATION: bearer ${GH_TOKEN}"
+          git config "http.https://github.com/.extraheader" "${AUTH_HDR}"
+
           git remote add origin "${HEAD_REPO_URL}"
-          # Add the base repo as a second remote so we can resolve the base
-          # ref (origin/<base>) the same way `ocr review --from` expects.
-          git remote add base "${{ github.event.pull_request.base.repo.clone_url }}"
-          git fetch --depth=50 base "${BASE_REF}"
-          git fetch --depth=50 origin "${HEAD_SHA}"
+          git remote add base "${BASE_REPO_URL}"
+
+          # Full fetch (no --depth) so `git merge-base origin/<base>..HEAD`
+          # always succeeds — shallow clones miss the merge base when the PR
+          # diverged more than N commits ago. Use --filter=blob:none to
+          # skip blob downloads and keep this fast on large repos.
+          git fetch --filter=blob:none --no-tags base "${BASE_REF}"
+          git fetch --filter=blob:none --no-tags origin "${HEAD_SHA}"
+
           git checkout --detach "${HEAD_SHA}"
           # Make origin/<base> resolvable for `--from`.
           git update-ref "refs/remotes/origin/${BASE_REF}" "$(git rev-parse base/${BASE_REF})"
@@ -88,14 +103,26 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Install OCR from a pinned upstream version
+      - name: Install Andorra OCR from a pinned fork release
         if: steps.detect.outputs.present == 'true'
         env:
-          # SECURITY: This must point at a tag/commit YOU trust. Never use
-          # @HEAD, a branch, or a ref the PR author can influence.
-          OCR_VERSION: v1.0.0
+          # SECURITY: this must point at a tag/commit YOU trust in the
+          # ANDORRA FORK repo (which is where the ensemble CLI lives).
+          # Upstream `open-code-review` does not have `review --ensemble` —
+          # do not point ANDORRA_OCR_REF at an upstream tag.
+          # Never use a branch, @HEAD, or a ref the PR author can influence.
+          ANDORRA_OCR_REPO: https://github.com/Andorra-Labs/Andorra-Code-Review.git
+          ANDORRA_OCR_REF: main # ← replace with a fork release tag, e.g. v0.1.0
         run: |
-          go install "github.com/open-code-review/open-code-review/cmd/opencodereview@${OCR_VERSION}"
+          # Build from a clean clone of the fork at the pinned ref. We don't
+          # `go install github.com/.../cmd/opencodereview@TAG` because the
+          # fork keeps the upstream module path, so that command would fetch
+          # upstream code, not the fork.
+          tmp="$(mktemp -d)"
+          git -c advice.detachedHead=false clone --depth 1 \
+            --branch "${ANDORRA_OCR_REF}" \
+            "${ANDORRA_OCR_REPO}" "${tmp}/src"
+          (cd "${tmp}/src" && go build -o "$(go env GOPATH)/bin/opencodereview" ./cmd/opencodereview)
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run ensemble review (trusted binary + base config + sandboxed PR data)
