@@ -173,14 +173,23 @@ func normalizeTitle(t string) string {
 }
 
 // buildFinding selects the group's representative title, line range, and
-// deduped Sources list.
+// deduped Sources list. Prefer members with a resolved (non-zero) line range
+// so groups that contain both unresolved and resolved findings still produce
+// an inline-renderable comment when possible.
 func buildFinding(gid string, members []finding.RawFinding) finding.Finding {
 	if len(members) == 0 {
 		return finding.Finding{GroupID: gid}
 	}
 	best := members[0]
+	bestHasRange := best.StartLine > 0 || best.EndLine > 0
 	for _, m := range members[1:] {
-		if m.Confidence > best.Confidence {
+		mHasRange := m.StartLine > 0 || m.EndLine > 0
+		if !bestHasRange && mHasRange {
+			best = m
+			bestHasRange = true
+			continue
+		}
+		if bestHasRange == mHasRange && m.Confidence > best.Confidence {
 			best = m
 		}
 	}

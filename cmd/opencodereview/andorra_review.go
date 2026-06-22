@@ -174,10 +174,32 @@ func shouldRunEnsemble(args []string) bool {
 		return false
 	}
 	ext, err := configstore.LoadAndorra(path)
-	if err != nil || ext == nil || ext.Ensemble == nil {
+	if err != nil {
+		// If an explicit --config or repo-local .ocr/config.json is malformed,
+		// route to the ensemble path so runAndorraReview surfaces the load/parse
+		// error instead of silently falling back to legacy single-model review.
+		if eopts.configPath != "" || isRepoLocalConfigPath(path, repoDir) {
+			return true
+		}
+		return false
+	}
+	if ext == nil || ext.Ensemble == nil {
 		return false
 	}
 	return ext.Ensemble.Enabled
+}
+
+// isRepoLocalConfigPath reports whether path is the discovered repo-local
+// .ocr/config.json (as opposed to the user-level default).
+func isRepoLocalConfigPath(path, repoDir string) bool {
+	root := gitTopLevel(repoDir)
+	if root != "" && path == filepath.Join(root, ".ocr", "config.json") {
+		return true
+	}
+	if cwd, err := os.Getwd(); err == nil && path == filepath.Join(cwd, ".ocr", "config.json") {
+		return true
+	}
+	return false
 }
 
 // resolveAndorraConfigPath implements the fork's config lookup order:
@@ -484,6 +506,11 @@ func runAndorraReview(args []string) error {
 	// stderr / JSON warnings make the outage unmistakable.
 	if arbiterOutage(arbiterUsage, finals) {
 		injectArbiterOutageWarning(result, len(groups))
+	} else if partial, omitted := arbiterPartialOmission(finals); partial {
+		// Partial arbiter responses accept some groups but omit others; those
+		// omitted groups fall back to uncertain and can be silently dropped by
+		// the default accepted-only filter. Warn so the failure is visible.
+		injectArbiterPartialWarning(result, omitted)
 	}
 	verdictCounts := map[finding.Verdict]int{}
 	for _, f := range finals {

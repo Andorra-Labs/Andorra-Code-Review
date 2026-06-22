@@ -27,6 +27,10 @@ func Validate(ext *AndorraExt) []error {
 	}
 	seenNames := map[string]struct{}{}
 	for i, s := range e.Scanners {
+		// Disabled scanners are not run, so skip structural checks on them.
+		if s.Enabled != nil && !*s.Enabled {
+			continue
+		}
 		if s.Name == "" {
 			errs = append(errs, fmt.Errorf("ensemble.scanners[%d]: name is required", i))
 		} else if _, dup := seenNames[s.Name]; dup {

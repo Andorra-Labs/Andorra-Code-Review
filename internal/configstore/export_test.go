@@ -91,6 +91,11 @@ func TestEnvForProviderKey(t *testing.T) {
 		"openai":        "OCR_OPENAI_API_KEY",
 		"my-gateway":    "OCR_MY_GATEWAY_API_KEY",
 		"corp.gateway":  "OCR_CORP_GATEWAY_API_KEY",
+		"my/gw":         "OCR_MY_GW_API_KEY",
+		"my@@gw":        "OCR_MY_GW_API_KEY",
+		"gateway 2":     "OCR_GATEWAY_2_API_KEY",
+		"1gateway":      "OCR_1GATEWAY_API_KEY",
+		"___weird___":  "OCR_WEIRD_API_KEY",
 	}
 	for in, want := range cases {
 		if got := envForProviderKey("OCR_", in); got != want {

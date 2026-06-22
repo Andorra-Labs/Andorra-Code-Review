@@ -273,6 +273,25 @@ func TestGroupPicksHighestConfidenceTitle(t *testing.T) {
 	}
 }
 
+func TestGroupPrefersResolvedLineRange(t *testing.T) {
+	// When one scanner could not resolve existing_code back to a line (0,0)
+	// but another did, the group representative should carry the resolved
+	// range so the finding can render inline rather than as unresolved.
+	raw := []finding.RawFinding{
+		{Path: "a.go", StartLine: 0, EndLine: 0, Title: "unresolved",
+			Source: finding.Source{Scanner: "a"}, Confidence: 0.0},
+		{Path: "a.go", StartLine: 15, EndLine: 17, Title: "resolved",
+			Source: finding.Source{Scanner: "b"}, Confidence: 0.0},
+	}
+	got := Group(raw, Default())
+	if len(got) != 1 {
+		t.Fatalf("expected 1 group")
+	}
+	if got[0].StartLine != 15 || got[0].EndLine != 17 {
+		t.Errorf("range=%d-%d, want 15-17", got[0].StartLine, got[0].EndLine)
+	}
+}
+
 func absDelta(a, b float64) float64 {
 	d := a - b
 	if d < 0 {

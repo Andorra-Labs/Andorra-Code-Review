@@ -73,6 +73,36 @@ func injectArbiterOutageWarning(res ensemble.Result, groupCount int) {
 	res.Scanners[0].Warnings = append(res.Scanners[0].Warnings, w)
 }
 
+// arbiterPartialOmission reports whether the arbiter returned a usable verdict
+// for some groups but fell back to synthetic uncertain reasons for others.
+// Those omitted groups are silently dropped by the default accepted-only
+// filter, so we surface a warning.
+func arbiterPartialOmission(finals []finding.FinalFinding) (bool, int) {
+	if len(finals) == 0 {
+		return false, 0
+	}
+	count := 0
+	for _, f := range finals {
+		if isArbiterFallbackReason(f.VerdictReason) {
+			count++
+		}
+	}
+	return count > 0 && count < len(finals), count
+}
+
+// injectArbiterPartialWarning appends a synthetic warning for partial arbiter
+// omissions so users notice when some candidate findings were dropped.
+func injectArbiterPartialWarning(res ensemble.Result, count int) {
+	if len(res.Scanners) == 0 {
+		return
+	}
+	w := agent.AgentWarning{
+		Type:    "arbiter_partial",
+		Message: fmt.Sprintf("arbiter omitted verdicts for %d candidate group(s); those findings were marked uncertain and may be filtered from default output", count),
+	}
+	res.Scanners[0].Warnings = append(res.Scanners[0].Warnings, w)
+}
+
 // buildDiffMap builds the path->diff lookup the arbiter uses for evidence.
 func buildDiffMap(diffs []model.Diff) map[string]string {
 	out := make(map[string]string, len(diffs))

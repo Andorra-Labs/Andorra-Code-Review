@@ -156,12 +156,13 @@ jobs:
             cp .opencodereview/rule.json trusted-rules/rule.json
             echo "TRUSTED_RULE_PATH=$(pwd)/trusted-rules/rule.json" >> "$GITHUB_ENV"
           fi
-          # Unconditionally remove PR-head rule discovery surface. Even when
+          # Unconditionally remove the PR-head rule discovery surface. Even when
           # --rule is set, rules.NewResolver still auto-discovers a project
           # rule.json under repoDir; without this scrub, a fork PR adding
           # pr-head/.opencodereview/rule.json could still inject PR-author-
-          # controlled rules into a base-config repo.
-          rm -rf pr-head/.opencodereview/rule.json pr-head/.opencodereview/rules || true
+          # controlled rules into a base-config repo. Removing the entire path
+          # avoids following a malicious symlink in pr-head/.opencodereview.
+          rm -rf pr-head/.opencodereview || true
 
       - name: Stage trusted .gitignore (from base ref, not PR head)
         if: steps.detect.outputs.present == 'true'
@@ -169,9 +170,13 @@ jobs:
           # The diff provider reads repoDir/.gitignore when filtering parsed
           # diffs. Copy the base ref's ignore rules over the PR-head checkout
           # so a fork PR cannot hide changed files by adding patterns like
-          # `*.go` to its branch's .gitignore.
+          # `*.go` to its branch's .gitignore. If the base ref has no
+          # .gitignore, delete any PR-head .gitignore so a fork PR cannot
+          # inject one either.
           if [ -f .gitignore ]; then
             cp .gitignore pr-head/.gitignore
+          else
+            rm -f pr-head/.gitignore
           fi
 
       - name: Run ensemble review (trusted binary + base config/rules + sandboxed PR data)

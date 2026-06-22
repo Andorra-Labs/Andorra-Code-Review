@@ -96,11 +96,48 @@ func applySecretMode(entry map[string]json.RawMessage, key, envName string, mode
 	}
 }
 
-// envForProviderKey produces a sensible env-var name for a provider's API key.
+// envForProviderKey produces a valid env-var name for a provider's API key.
 // Example: "anthropic" -> "OCR_ANTHROPIC_API_KEY"; "my-gateway" -> "OCR_MY_GATEWAY_API_KEY".
+// Characters outside [A-Z0-9_] are normalized to underscores, consecutive
+// underscores are collapsed, and a leading digit is escaped with an underscore
+// when the caller supplies no prefix, so exported placeholders actually match
+// the runtime expander.
 func envForProviderKey(prefix, providerName string) string {
 	upper := strings.ToUpper(providerName)
-	upper = strings.ReplaceAll(upper, "-", "_")
-	upper = strings.ReplaceAll(upper, ".", "_")
+	upper = strings.Map(func(r rune) rune {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		return '_'
+	}, upper)
+	// Collapse consecutive underscores and trim leading/trailing ones.
+	upper = collapseUnderscores(upper)
+	if upper == "" {
+		upper = "PROVIDER"
+	}
+	// The default prefix supplies a leading alpha, but if the caller passes an
+	// empty prefix we still need a valid identifier. Prefix an underscore when
+	// the normalized provider name would start with a digit.
+	if prefix == "" && upper[0] >= '0' && upper[0] <= '9' {
+		upper = "_" + upper
+	}
 	return prefix + upper + "_API_KEY"
+}
+
+func collapseUnderscores(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevUnderscore := false
+	for _, r := range s {
+		if r == '_' {
+			if !prevUnderscore {
+				b.WriteRune(r)
+			}
+			prevUnderscore = true
+			continue
+		}
+		prevUnderscore = false
+		b.WriteRune(r)
+	}
+	return strings.Trim(b.String(), "_")
 }
