@@ -36,13 +36,22 @@
         "properties": {
           "comments": {
             "type": "array",
-            "description": "A list of comments. Each item should contain 'content' and 'existing_code'.",
+            "description": "A list of comments. Each item should contain 'title', 'severity', 'content', and 'existing_code'.",
             "items": {
               "type": "object",
               "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "Short imperative headline for the issue (5-8 words). Example: 'Gate ensemble routing on enabled scanners'. Rendered as a bold line at the top of the PR comment."
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": ["P1", "P2", "P3"],
+                  "description": "Severity classification. P1 = critical bug, data loss, security issue, or crash. P2 = real bug or significant defect affecting correctness/maintainability. P3 = style, readability, or minor improvement. Rendered as a colored badge next to the title."
+                },
                 "content": {
                   "type": "string",
-                  "description": "Comment content, typically a brief description of code issues and corresponding suggestions."
+                  "description": "Detailed explanation of the issue and the suggested fix. One or two short paragraphs."
                 },
                 "existing_code": {
                   "type": "string",
@@ -54,6 +63,8 @@
                 }
               },
               "required": [
+                "title",
+                "severity",
                 "content",
                 "existing_code"
               ]

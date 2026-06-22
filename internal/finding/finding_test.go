@@ -226,3 +226,53 @@ func TestToCommentEmptyMembers(t *testing.T) {
 		t.Errorf("expected title fallback, got %q", out.Content)
 	}
 }
+
+func TestFromCommentPrefersLLMTitle(t *testing.T) {
+	c := model.LlmComment{
+		Path: "f.go", Content: "First line of content\n\nBody",
+		Title:    "Explicit title from LLM",
+		Severity: "P1",
+	}
+	r := FromComment(c, Source{Scanner: "opus"}, 0)
+	if r.Title != "Explicit title from LLM" {
+		t.Errorf("title=%q, want explicit", r.Title)
+	}
+	if r.Severity != "P1" {
+		t.Errorf("severity=%q, want P1", r.Severity)
+	}
+}
+
+func TestFromCommentFallsBackToContentFirstLine(t *testing.T) {
+	c := model.LlmComment{Path: "f.go", Content: "Off-by-one in loop\n\nDetail"}
+	r := FromComment(c, Source{Scanner: "opus"}, 0)
+	if r.Title != "Off-by-one in loop" {
+		t.Errorf("title=%q, want first-line fallback", r.Title)
+	}
+	if r.Severity != "" {
+		t.Errorf("severity=%q, want empty when LLM omits it", r.Severity)
+	}
+}
+
+func TestToCommentPropagatesTitleAndSeverity(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "d", Severity: "P2", Confidence: 0.4}
+	r2 := RawFinding{Path: "f.go", Detail: "d longer", Severity: "P1", Confidence: 0.9}
+	f := mkFinal(VerdictAccepted, r1, r2)
+	f.Title = "Gate routing on enabled scanners"
+	out := ToComment(f, RenderOptions{})
+	if out.Title != "Gate routing on enabled scanners" {
+		t.Errorf("title=%q", out.Title)
+	}
+	// Higher-confidence member wins on severity.
+	if out.Severity != "P1" {
+		t.Errorf("severity=%q, want P1 (highest-confidence wins)", out.Severity)
+	}
+}
+
+func TestToCommentSeverityEmptyWhenAllMembersUnset(t *testing.T) {
+	r1 := RawFinding{Path: "f.go", Detail: "d"}
+	r2 := RawFinding{Path: "f.go", Detail: "d2"}
+	out := ToComment(mkFinal(VerdictAccepted, r1, r2), RenderOptions{})
+	if out.Severity != "" {
+		t.Errorf("severity=%q, want empty", out.Severity)
+	}
+}

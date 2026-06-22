@@ -8,18 +8,24 @@ import (
 )
 
 // FromComment converts an upstream LlmComment into a RawFinding tagged with the
-// given scanner source. Title is the first non-empty line of Content (capped at
-// 120 chars). Detail is the full Content.
+// given scanner source. Title prefers the LLM-supplied c.Title; when absent it
+// falls back to the first non-empty line of Content (capped at 120 chars).
+// Detail is the full Content.
 func FromComment(c model.LlmComment, src Source, idx int) RawFinding {
+	title := strings.TrimSpace(c.Title)
+	if title == "" {
+		title = extractTitle(c.Content)
+	}
 	return RawFinding{
 		Path:           c.Path,
 		StartLine:      c.StartLine,
 		EndLine:        c.EndLine,
-		Title:          extractTitle(c.Content),
+		Title:          title,
 		Detail:         c.Content,
 		ExistingCode:   c.ExistingCode,
 		SuggestionCode: c.SuggestionCode,
 		Source:         src,
+		Severity:       c.Severity,
 		Thinking:       c.Thinking,
 		RawIndex:       idx,
 	}
@@ -76,7 +82,33 @@ func ToComment(f FinalFinding, opts RenderOptions) model.LlmComment {
 		ExistingCode:   existing,
 		StartLine:      f.StartLine,
 		EndLine:        f.EndLine,
+		Title:          f.Title,
+		Severity:       pickSeverity(f.Finding),
 	}
+}
+
+// pickSeverity returns the severity reported by the highest-confidence member
+// that supplied one. When no member set severity, returns "". Mismatched
+// severities across scanners are resolved by confidence rather than worst-case
+// because arbiter dedup already filtered to the same underlying issue.
+func pickSeverity(f Finding) string {
+	if len(f.Members) == 0 {
+		return ""
+	}
+	var best *RawFinding
+	for i := range f.Members {
+		m := &f.Members[i]
+		if m.Severity == "" {
+			continue
+		}
+		if best == nil || m.Confidence > best.Confidence {
+			best = m
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return best.Severity
 }
 
 func combineDetail(f Finding) string {
