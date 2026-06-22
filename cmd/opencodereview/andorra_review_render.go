@@ -26,6 +26,39 @@ func aggregateWarnings(res ensemble.Result) []agent.AgentWarning {
 	return out
 }
 
+// arbiterOutage reports whether the arbiter call failed (no usage reported)
+// despite there being groups to judge. When true, every group ended up as
+// VerdictUncertain because applyVerdicts fell back to the unavailable path.
+func arbiterOutage(usage finding.TokenUsage, finals []finding.FinalFinding) bool {
+	if len(finals) == 0 {
+		return false
+	}
+	if usage.InputTokens != 0 || usage.OutputTokens != 0 {
+		return false
+	}
+	for _, f := range finals {
+		if f.Verdict != finding.VerdictUncertain {
+			return false
+		}
+	}
+	return true
+}
+
+// injectArbiterOutageWarning appends a synthetic warning to the first
+// scanner's Warnings slice so aggregateWarnings surfaces it through both
+// stderr and the JSON `warnings` field. The warning is loud enough that a
+// user can't mistake an arbiter outage for a clean PR.
+func injectArbiterOutageWarning(res ensemble.Result, groupCount int) {
+	if len(res.Scanners) == 0 {
+		return
+	}
+	w := agent.AgentWarning{
+		Type:    "arbiter_failed",
+		Message: fmt.Sprintf("arbiter call failed or returned no verdicts — all %d candidate group(s) marked uncertain; rerun with --verdict-filter all to see the raw groups, or pick a different arbiter model", groupCount),
+	}
+	res.Scanners[0].Warnings = append(res.Scanners[0].Warnings, w)
+}
+
 // buildDiffMap builds the path->diff lookup the arbiter uses for evidence.
 func buildDiffMap(diffs []model.Diff) map[string]string {
 	out := make(map[string]string, len(diffs))

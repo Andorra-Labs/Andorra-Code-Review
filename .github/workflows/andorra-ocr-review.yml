@@ -106,14 +106,23 @@ jobs:
       - name: Install Andorra OCR from a pinned fork release
         if: steps.detect.outputs.present == 'true'
         env:
-          # SECURITY: this must point at a tag/commit YOU trust in the
-          # ANDORRA FORK repo (which is where the ensemble CLI lives).
-          # Upstream `open-code-review` does not have `review --ensemble` —
-          # do not point ANDORRA_OCR_REF at an upstream tag.
-          # Never use a branch, @HEAD, or a ref the PR author can influence.
+          # SECURITY: ANDORRA_OCR_REF must be an IMMUTABLE ref — a release
+          # tag or a full commit SHA. Branch names (including 'main') are
+          # mutable: anyone who can push to that branch can change what
+          # trusted code runs here with secrets. The guard below rejects
+          # obviously-mutable refs at runtime.
+          # Update the value below when you adopt a new fork release.
           ANDORRA_OCR_REPO: https://github.com/Andorra-Labs/Andorra-Code-Review.git
-          ANDORRA_OCR_REF: main # ← replace with a fork release tag, e.g. v0.1.0
+          ANDORRA_OCR_REF: REPLACE_WITH_RELEASE_TAG_OR_COMMIT_SHA
         run: |
+          # Hard fail if the operator hasn't pinned an immutable ref.
+          case "${ANDORRA_OCR_REF}" in
+            ""|main|master|develop|trunk|HEAD|REPLACE_*)
+              echo "::error::ANDORRA_OCR_REF (${ANDORRA_OCR_REF:-empty}) is mutable. Pin a release tag like v0.1.0 or a full 40-char commit SHA."
+              exit 1
+              ;;
+          esac
+
           # Build from a clean clone of the fork at the pinned ref. We don't
           # `go install github.com/.../cmd/opencodereview@TAG` because the
           # fork keeps the upstream module path, so that command would fetch
@@ -125,7 +134,21 @@ jobs:
           (cd "${tmp}/src" && go build -o "$(go env GOPATH)/bin/opencodereview" ./cmd/opencodereview)
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Run ensemble review (trusted binary + base config + sandboxed PR data)
+      - name: Stage trusted rule file (from base ref, not PR head)
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          # If the base ref carries a project rule file, copy it to a known
+          # path that the review step can pass via --rule. Without this, OCR
+          # would discover .opencodereview/rule.json inside pr-head/ and read
+          # PR-author-controlled rules that could exclude changed files from
+          # review or otherwise tilt the result.
+          if [ -f .opencodereview/rule.json ]; then
+            mkdir -p trusted-rules
+            cp .opencodereview/rule.json trusted-rules/rule.json
+            echo "TRUSTED_RULE_PATH=$(pwd)/trusted-rules/rule.json" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run ensemble review (trusted binary + base config/rules + sandboxed PR data)
         if: steps.detect.outputs.present == 'true'
         working-directory: pr-head
         env:
@@ -136,9 +159,18 @@ jobs:
           OCR_BEDROCK_API_KEY:   ${{ secrets.OCR_BEDROCK_API_KEY }}
           OCR_BEDROCK_REGION:    ${{ secrets.OCR_BEDROCK_REGION }}
         run: |
+          # Build --rule arg only when the base ref committed a rule file;
+          # otherwise OCR uses its built-in defaults and ignores any
+          # PR-head .opencodereview/rule.json (because --rule, when set,
+          # short-circuits the auto-discovery path).
+          rule_arg=()
+          if [ -n "${TRUSTED_RULE_PATH:-}" ]; then
+            rule_arg=(--rule "${TRUSTED_RULE_PATH}")
+          fi
           opencodereview review \
             --ensemble \
             --config ../.ocr/config.json \
+            "${rule_arg[@]}" \
             --from origin/${{ github.event.pull_request.base.ref }} \
             --to ${{ github.event.pull_request.head.sha }} \
             --format json \
@@ -152,7 +184,12 @@ jobs:
           script: |
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('review.json', 'utf8'));
-            const comments = (data.comments || []).map(c => ({
+
+            // Split findings into inline-renderable vs no-line. createReview
+            // rejects the whole batch if any comment has line=0, so unresolved
+            // findings (where the diff resolver couldn't match existing_code
+            // back to a line) get reported separately in the summary text.
+            const allComments = (data.comments || []).map(c => ({
               path: c.path,
               line: c.end_line || c.start_line,
               side: 'RIGHT',
@@ -160,15 +197,32 @@ jobs:
                 ? '\n\n```suggestion\n' + c.suggestion_code + '\n```'
                 : '')
             }));
+            const inline = allComments.filter(c => c.line > 0);
+            const unresolved = allComments.filter(c => !(c.line > 0));
+
+            const warnings = (data.warnings || []);
+            const warningLine = warnings.length
+              ? `\n\n⚠️ **${warnings.length} warning(s):** ` +
+                warnings.map(w => `${w.type || 'warning'}: ${w.message || ''}`).join('; ')
+              : '';
+
+            const unresolvedSection = unresolved.length
+              ? '\n\n**Unresolved-line findings** (could not match to a diff line):\n\n' +
+                unresolved.map(c => `- **${c.path}** — ${c.body}`).join('\n\n')
+              : '';
+
             const summary = data.ensemble
-              ? `**Andorra OCR ensemble:** ${data.ensemble.scanners.length} scanners, ${data.ensemble.groups.length} groups → ${comments.length} accepted bug(s).`
-              : `**Andorra OCR:** ${comments.length} comment(s).`;
-            if (comments.length === 0) {
+              ? `**Andorra OCR ensemble:** ${data.ensemble.scanners.length} scanners, ${data.ensemble.groups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
+              : `**Andorra OCR:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
+
+            const body = summary + warningLine + unresolvedSection;
+
+            if (inline.length === 0) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: summary + '\n\n_No accepted-bug findings on this diff._'
+                body: body + (unresolved.length ? '' : '\n\n_No accepted-bug findings on this diff._')
               });
               return;
             }
@@ -179,8 +233,8 @@ jobs:
                 pull_number: context.issue.number,
                 commit_id: '${{ github.event.pull_request.head.sha }}',
                 event: 'COMMENT',
-                body: summary,
-                comments
+                body: body,
+                comments: inline,
               });
             } catch (err) {
               core.warning(`createReview failed: ${err.message}. Falling back to issue comment.`);
@@ -188,7 +242,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: summary + '\n\n' + comments.map(c =>
+                body: body + '\n\n' + inline.map(c =>
                   `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n')
               });
             }

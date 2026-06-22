@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -153,8 +154,10 @@ func parseCSV(s string) []string {
 }
 
 // shouldRunEnsemble decides whether the ensemble path applies. Called from
-// dispatch() before runReview(). Failure to load configstore is treated as
-// "no ensemble configured" so the legacy path still runs cleanly.
+// dispatch() before runReview(). Any config with `ensemble.enabled=true`
+// routes to the ensemble path — even if scanners or arbiter are missing —
+// so that runAndorraReview surfaces a clear validation error rather than
+// silently falling back to single-model review.
 func shouldRunEnsemble(args []string) bool {
 	eopts, _ := splitEnsembleArgs(args)
 	if eopts.forceLegacy {
@@ -174,31 +177,51 @@ func shouldRunEnsemble(args []string) bool {
 	if err != nil || ext == nil || ext.Ensemble == nil {
 		return false
 	}
-	return ext.Ensemble.Enabled && len(ext.Ensemble.Scanners) >= 2 && ext.Ensemble.Arbiter != nil
+	return ext.Ensemble.Enabled
 }
 
 // resolveAndorraConfigPath implements the fork's config lookup order:
-//   explicit --config flag → <repoDir>/.ocr/config.json → ~/.opencodereview/config.json
+//   explicit --config flag → <gitRoot(repoDir)>/.ocr/config.json
+//   → <cwd>/.ocr/config.json → ~/.opencodereview/config.json
 // Repo-local beats user-level so CI deterministically uses the committed file.
-// repoDir is the resolved review target (may differ from the process cwd when
-// the user passes --repo); pass "" to fall back to cwd for the quick
-// pre-flight detection.
+// The gitRoot lookup means `ocr review --repo path/to/subdir` still finds
+// the config committed at the repository root.
 func resolveAndorraConfigPath(explicit, repoDir string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	var repoLocal string
-	if repoDir != "" {
-		repoLocal = filepath.Join(repoDir, ".ocr", "config.json")
-	} else if cwd, err := os.Getwd(); err == nil {
-		repoLocal = filepath.Join(cwd, ".ocr", "config.json")
-	} else {
-		repoLocal = filepath.Join(".ocr", "config.json")
+	// Walk up to the git toplevel from repoDir (or cwd) so a subdirectory
+	// invocation still locates the committed .ocr/config.json at the root.
+	root := gitTopLevel(repoDir)
+	if root != "" {
+		repoLocal := filepath.Join(root, ".ocr", "config.json")
+		if _, err := os.Stat(repoLocal); err == nil {
+			return repoLocal, nil
+		}
 	}
-	if _, err := os.Stat(repoLocal); err == nil {
-		return repoLocal, nil
+	if cwd, err := os.Getwd(); err == nil {
+		repoLocal := filepath.Join(cwd, ".ocr", "config.json")
+		if _, err := os.Stat(repoLocal); err == nil {
+			return repoLocal, nil
+		}
 	}
 	return configstore.DefaultPath()
+}
+
+// gitTopLevel runs `git rev-parse --show-toplevel` against dir (or cwd when
+// dir is empty) and returns the absolute path of the enclosing repository
+// root. Returns "" when the directory is not inside a git repo, in which
+// case the caller falls back to cwd-relative probing.
+func gitTopLevel(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // runAndorraReview executes the ensemble review pipeline. Mirrors the high-level
@@ -454,6 +477,13 @@ func runAndorraReview(args []string) error {
 	)
 	arbiterClient := buildClient(arbiterEp, ext.Ensemble.Arbiter.Bedrock)
 	finals, arbiterUsage := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
+	// An arbiter outage produces all-uncertain verdicts AND zero usage.
+	// Without a loud warning, the default accepted-only filter drops every
+	// finding and the PR looks clean. Surface a synthetic AgentWarning so
+	// stderr / JSON warnings make the outage unmistakable.
+	if arbiterOutage(arbiterUsage, finals) {
+		injectArbiterOutageWarning(result, len(groups))
+	}
 	verdictCounts := map[finding.Verdict]int{}
 	for _, f := range finals {
 		verdictCounts[f.Verdict]++
