@@ -36,11 +36,12 @@ on:
     types: [created]
 
 concurrency:
-  # For pull_request events all runs on the same PR share the group so a new
-  # push cancels an in-flight review. For issue_comment events include the
-  # comment id so unrelated comments do not cancel an OCR run that is in
-  # progress (the job-level if-gate filters too late to prevent the cancel).
-  group: ocr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref_name }}-${{ github.event_name == 'issue_comment' && github.event.comment.id || 'pr' }}
+  # Real OCR runs (pull_request events + @ocr/@open-code-review/
+  # /open-code-review comments) share the per-PR group so a new push
+  # cancels an in-flight review. Unrelated/non-trigger comments get
+  # isolated by comment id so they cannot cancel an in-progress run via
+  # cancel-in-progress (the job-level if-gate filters too late).
+  group: ocr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref_name }}-${{ (github.event_name == 'pull_request' || startsWith(github.event.comment.body, '/open-code-review') || startsWith(github.event.comment.body, '@open-code-review') || startsWith(github.event.comment.body, '@ocr')) && 'pr' || github.event.comment.id }}
   cancel-in-progress: true
 
 permissions:
@@ -180,10 +181,14 @@ jobs:
         shell: bash
         # Tailscale peer info is eventually consistent; the LLM test step
         # below can fail with a transient name-resolution or connection error
-        # if it runs before the spark peer is reachable.
+        # if it runs before the spark peer is reachable. We only need
+        # reachability (HTTP works over DERP relays too), so pass
+        # --until-direct=false — otherwise a peer that is reachable only via
+        # DERP returns non-zero with "direct connection not established"
+        # and would fail this check unnecessarily.
         run: |
           for i in $(seq 1 30); do
-            if tailscale ping -c 1 spark.tail93d320.ts.net >/dev/null 2>&1; then
+            if tailscale ping --until-direct=false -c 1 spark.tail93d320.ts.net >/dev/null 2>&1; then
               echo "Spark peer reachable after ${i} attempt(s)"
               exit 0
             fi
