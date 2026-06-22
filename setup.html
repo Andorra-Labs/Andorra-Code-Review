@@ -404,6 +404,13 @@
   </div>
 </div>
 
+<div class="panel" id="secretsPanel" hidden>
+  <h2>GitHub Actions secrets</h2>
+  <p class="hint">Empty API keys above were exported as <code class="inline">${env:NAME}</code> placeholders. For the Andorra Review workflow to find them in CI, add each name below as a secret on your repo (<em>Settings → Secrets and variables → Actions → New repository secret</em>) or your organization (same path under the org settings — pick "All repositories" or select this repo explicitly).</p>
+  <div id="secretsList"></div>
+  <p class="hint" style="margin-top:12px">If a provider's endpoint doesn't need authentication (e.g. a local vLLM), set the env var to any non-empty placeholder like <code class="inline">none</code> — the resolver only checks for presence, not validity.</p>
+</div>
+
 <div class="panel">
   <h2>Where to put it</h2>
   <div class="path-row">
@@ -884,6 +891,20 @@ $("arbiterMode").addEventListener("change", (e) => {
 
 /* ───── output ────────────────────────────────────────────────────────── */
 
+// envVarForProvider mirrors internal/configstore/export.go's envForProviderKey:
+// uppercase the provider name, replace non-[A-Z0-9_] with _, collapse runs,
+// trim leading/trailing underscores. Used both when emitting api_key
+// placeholders and when listing required GitHub Actions secrets.
+function envVarForProvider(name) {
+  let upper = String(name || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!upper) upper = "PROVIDER";
+  return `OCR_${upper}_API_KEY`;
+}
+
 function buildConfig() {
   const cfg = { custom_providers: {}, providers: {} };
   for (const p of state.providers) {
@@ -891,7 +912,14 @@ function buildConfig() {
     if (!PROVIDER_NAME_RE.test(p.name)) continue;
     const entry = { protocol: p.protocol };
     if (p.url) entry.url = p.url;
-    if (p.api_key) entry.api_key = p.api_key;
+    // Emit api_key in all cases. A non-empty user value lands verbatim; an
+    // empty value gets a ${env:OCR_<NAME>_API_KEY} placeholder so the
+    // downloaded config is loadable by CI without anyone having to know
+    // the env-var naming convention. The resolver requires a non-empty
+    // api_key for custom providers (preset providers have a hardcoded env
+    // fallback, but the placeholder works for them too — it just routes
+    // through configstore's ${env:...} expansion instead).
+    entry.api_key = p.api_key || `\${env:${envVarForProvider(p.name)}}`;
     if (p.auth_header) entry.auth_header = p.auth_header;
     if (p.models.length > 0) entry.models = [...p.models];
     if (p.extra_body && typeof p.extra_body === "object" && Object.keys(p.extra_body).length > 0) {
@@ -1006,8 +1034,67 @@ function isConfigValid() {
   return true;
 }
 
+// extractRequiredSecrets walks providers + custom_providers and returns
+// every ${env:NAME} placeholder it finds, tagged with which provider /
+// field referenced it. Used to render the "GitHub Actions secrets" panel.
+function extractRequiredSecrets(cfg) {
+  const re = /^\$\{env:([A-Z0-9_]+)\}$/;
+  const found = new Map();
+  const visitEntry = (providerName, entry) => {
+    if (!entry || typeof entry !== "object") return;
+    for (const [field, value] of Object.entries(entry)) {
+      if (typeof value !== "string") continue;
+      const m = value.match(re);
+      if (!m) continue;
+      const varName = m[1];
+      const desc = `used by provider "${providerName}" (${field})`;
+      if (!found.has(varName)) found.set(varName, [desc]);
+      else found.get(varName).push(desc);
+    }
+  };
+  for (const [name, entry] of Object.entries(cfg.providers || {})) visitEntry(name, entry);
+  for (const [name, entry] of Object.entries(cfg.custom_providers || {})) visitEntry(name, entry);
+  // Legacy llm.auth_token uses ${env:OCR_LLM_AUTH_TOKEN}.
+  if (cfg.llm && typeof cfg.llm === "object") {
+    for (const [field, value] of Object.entries(cfg.llm)) {
+      if (typeof value !== "string") continue;
+      const m = value.match(re);
+      if (!m) continue;
+      const desc = `used by llm.${field}`;
+      if (!found.has(m[1])) found.set(m[1], [desc]);
+      else found.get(m[1]).push(desc);
+    }
+  }
+  return Array.from(found.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([varName, uses]) => ({ varName, uses }));
+}
+
+function renderSecrets(cfg) {
+  const secrets = extractRequiredSecrets(cfg);
+  const panel = $("secretsPanel");
+  const list = $("secretsList");
+  if (secrets.length === 0) {
+    panel.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  list.innerHTML = "";
+  for (const s of secrets) {
+    const row = document.createElement("div");
+    row.className = "path-row";
+    row.innerHTML =
+      `<code class="inline">${s.varName}</code>` +
+      `<span class="hint" style="margin:0">${s.uses.join("; ")}</span>`;
+    list.appendChild(row);
+  }
+}
+
 function render() {
-  $("preview").textContent = JSON.stringify(maskConfig(buildConfig()), null, 2);
+  const cfg = buildConfig();
+  $("preview").textContent = JSON.stringify(maskConfig(cfg), null, 2);
+  renderSecrets(cfg);
 }
 
 /* ───── import ────────────────────────────────────────────────────────── */
