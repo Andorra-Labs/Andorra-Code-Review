@@ -8,7 +8,7 @@ const vm = require("vm");
 
 const repoRoot = path.join(__dirname, "..", "..");
 const workflowFiles = [
-  ".github/workflows/ocr-review.yml",
+  ".github/workflows-legacy/ocr-review.yml",
   "examples/github_actions/ocr-review.yml",
 ];
 
