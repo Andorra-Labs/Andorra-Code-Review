@@ -31,7 +31,11 @@ on:
     types: [created]
 
 concurrency:
-  group: ocr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref_name }}
+  # For pull_request events all runs on the same PR share the group so a new
+  # push cancels an in-flight review. For issue_comment events include the
+  # comment id so unrelated comments do not cancel an OCR run that is in
+  # progress (the job-level if-gate filters too late to prevent the cancel).
+  group: ocr-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref_name }}-${{ github.event_name == 'issue_comment' && github.event.comment.id || 'pr' }}
   cancel-in-progress: true
 
 permissions:
@@ -157,6 +161,23 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
+      - name: Wait for Spark tailnet peer
+        if: ${{ steps.llm-provider.outputs.provider == 'spark' }}
+        shell: bash
+        # Tailscale peer info is eventually consistent; the LLM test step
+        # below can fail with a transient name-resolution or connection error
+        # if it runs before the spark peer is reachable.
+        run: |
+          for i in $(seq 1 30); do
+            if tailscale ping -c 1 spark.tail93d320.ts.net >/dev/null 2>&1; then
+              echo "Spark peer reachable after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: Spark peer not reachable after 60s"
+          exit 1
+
       - name: Configure OCR
         shell: bash
         env:
@@ -164,8 +185,10 @@ jobs:
           BEDROCK_LLM_URL_FROM_VAR: ${{ vars.OCR_LLM_URL }}
           BEDROCK_LLM_URL_FROM_SECRET: ${{ secrets.OCR_LLM_URL }}
           BEDROCK_LLM_AUTH_TOKEN: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
-          BEDROCK_LLM_MODEL: ${{ vars.OCR_LLM_MODEL }}
-          BEDROCK_LLM_USE_ANTHROPIC: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          BEDROCK_LLM_MODEL_FROM_VAR: ${{ vars.OCR_LLM_MODEL }}
+          BEDROCK_LLM_MODEL_FROM_SECRET: ${{ secrets.OCR_LLM_MODEL }}
+          BEDROCK_LLM_USE_ANTHROPIC_FROM_VAR: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          BEDROCK_LLM_USE_ANTHROPIC_FROM_SECRET: ${{ secrets.OCR_LLM_USE_ANTHROPIC }}
           SPARK_LLM_URL: http://spark.tail93d320.ts.net:9090/v1
           SPARK_LLM_AUTH_TOKEN: ${{ secrets.OCR_SPARK_LLM_AUTH_TOKEN }}
           SPARK_LLM_MODEL: ${{ vars.OCR_SPARK_LLM_MODEL }}
@@ -184,6 +207,8 @@ jobs:
             ocr config set llm.use_anthropic "false"
           else
             BEDROCK_LLM_URL="${BEDROCK_LLM_URL_FROM_VAR:-$BEDROCK_LLM_URL_FROM_SECRET}"
+            BEDROCK_LLM_MODEL="${BEDROCK_LLM_MODEL_FROM_VAR:-$BEDROCK_LLM_MODEL_FROM_SECRET}"
+            BEDROCK_LLM_USE_ANTHROPIC="${BEDROCK_LLM_USE_ANTHROPIC_FROM_VAR:-$BEDROCK_LLM_USE_ANTHROPIC_FROM_SECRET}"
             if [ -z "$BEDROCK_LLM_URL" ]; then
               echo "Missing Bedrock LLM URL. Set vars.OCR_LLM_URL or secrets.OCR_LLM_URL."
               exit 1
@@ -193,7 +218,7 @@ jobs:
               exit 1
             fi
             if [ -z "$BEDROCK_LLM_MODEL" ]; then
-              echo "Missing vars.OCR_LLM_MODEL."
+              echo "Missing OCR_LLM_MODEL. Set vars.OCR_LLM_MODEL or secrets.OCR_LLM_MODEL."
               exit 1
             fi
             ocr config set llm.url "$BEDROCK_LLM_URL"
