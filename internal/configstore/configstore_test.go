@@ -262,18 +262,23 @@ func TestValidateAcceptsNilAndEmpty(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsEnabledWithoutScanners(t *testing.T) {
-	ext := &AndorraExt{Ensemble: &EnsembleConfig{Enabled: true}}
+func TestValidateRejectsScannersWithoutArbiter(t *testing.T) {
+	ext := &AndorraExt{Ensemble: &EnsembleConfig{
+		Scanners: []ScannerSpec{{Name: "only", Provider: "anthropic"}},
+	}}
 	errs := Validate(ext)
 	if len(errs) == 0 {
 		t.Fatal("expected errors")
 	}
-	joined := joinErrs(errs)
-	if !strings.Contains(joined, "at least 2 enabled scanners") {
-		t.Errorf("missing scanner-count error: %s", joined)
+	if !strings.Contains(joinErrs(errs), "arbiter") {
+		t.Errorf("missing arbiter error: %v", errs)
 	}
-	if !strings.Contains(joined, "arbiter") {
-		t.Errorf("missing arbiter error: %s", joined)
+}
+
+func TestValidateAcceptsEmptyEnsemble(t *testing.T) {
+	ext := &AndorraExt{Ensemble: &EnsembleConfig{}}
+	if errs := Validate(ext); errs != nil {
+		t.Errorf("Validate(empty ensemble) returned %v", errs)
 	}
 }
 

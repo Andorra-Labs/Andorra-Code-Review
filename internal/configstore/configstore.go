@@ -25,10 +25,13 @@ type AndorraExt struct {
 }
 
 // EnsembleConfig configures the multi-scanner + arbiter pipeline.
-// When Enabled is false (or the whole block is absent), legacy single-model
-// behavior runs.
+// The ensemble path runs whenever at least one scanner is configured;
+// otherwise legacy single-model behavior runs.
 type EnsembleConfig struct {
-	Enabled bool `json:"enabled"`
+	// Enabled is retained only so configs written before this field was
+	// dropped continue to unmarshal cleanly. The routing and validation
+	// code no longer reads it — presence of Scanners is the gate.
+	Enabled bool `json:"enabled,omitempty"`
 	// Serial forces scanners to run one at a time (orchestrator concurrency = 1)
 	// instead of fanning out in parallel. Default (omitted) = parallel.
 	Serial   bool            `json:"serial,omitempty"`

@@ -353,8 +353,10 @@ func overviewData(configPath string, ext *configstore.AndorraExt) map[string]any
 	scannerCount := 0
 	arbiterModel := ""
 	if ext != nil && ext.Ensemble != nil {
-		enabled = ext.Ensemble.Enabled
 		scannerCount = len(ext.Ensemble.Scanners)
+		// "Enabled" in the UI status means the ensemble path will run —
+		// which now depends on scanner presence, not a separate flag.
+		enabled = scannerCount > 0
 		if ext.Ensemble.Arbiter != nil {
 			arbiterModel = ext.Ensemble.Arbiter.Model
 		}

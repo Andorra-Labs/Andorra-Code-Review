@@ -154,10 +154,10 @@ func parseCSV(s string) []string {
 }
 
 // shouldRunEnsemble decides whether the ensemble path applies. Called from
-// dispatch() before runReview(). Any config with `ensemble.enabled=true`
-// routes to the ensemble path — even if scanners or arbiter are missing —
-// so that runAndorraReview surfaces a clear validation error rather than
-// silently falling back to single-model review.
+// dispatch() before runReview(). Any config with at least one ensemble
+// scanner configured routes to the ensemble path — even if the arbiter
+// is missing — so that runAndorraReview surfaces a clear validation
+// error rather than silently falling back to single-model review.
 func shouldRunEnsemble(args []string) bool {
 	eopts, _ := splitEnsembleArgs(args)
 	if eopts.forceLegacy {
@@ -186,7 +186,7 @@ func shouldRunEnsemble(args []string) bool {
 	if ext == nil || ext.Ensemble == nil {
 		return false
 	}
-	return ext.Ensemble.Enabled
+	return len(ext.Ensemble.Scanners) > 0
 }
 
 // isRepoLocalConfigPath reports whether path is the discovered repo-local
@@ -337,8 +337,8 @@ func runAndorraReview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve scanners: %w", err)
 	}
-	if len(scanners) < 2 {
-		return fmt.Errorf("ensemble requires at least 2 scanners after filtering, got %d", len(scanners))
+	if len(scanners) < 1 {
+		return fmt.Errorf("ensemble requires at least 1 scanner after filtering, got %d", len(scanners))
 	}
 
 	arbiterModel := ext.Ensemble.Arbiter.Model

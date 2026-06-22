@@ -77,8 +77,8 @@ func TestEnsemblePOSTValidatesBeforeSaving(t *testing.T) {
 	s, path := newTestServer(t)
 	form := url.Values{}
 	form.Set("csrf_token", "test-csrf-token")
-	form.Set("enabled", "true")
-	// One scanner only -> validation should reject "at least 2 enabled scanners"
+	// Scanner configured but no arbiter -> validation should reject
+	// "ensemble.scanners requires ensemble.arbiter to be configured".
 	form.Set("scanner_name_0", "only")
 	form.Set("scanner_provider_0", "anthropic")
 	form.Set("scanner_model_0", "")
@@ -94,7 +94,7 @@ func TestEnsemblePOSTValidatesBeforeSaving(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 with errors rendered, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "at least 2 enabled scanners") {
+	if !strings.Contains(w.Body.String(), "arbiter") {
 		t.Errorf("validation error not surfaced: %s", w.Body)
 	}
 	// File should NOT have been modified

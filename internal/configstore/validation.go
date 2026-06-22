@@ -16,14 +16,8 @@ func Validate(ext *AndorraExt) []error {
 	}
 	var errs []error
 	e := ext.Ensemble
-	if e.Enabled {
-		active := countEnabledScanners(e.Scanners)
-		if active < 2 {
-			errs = append(errs, fmt.Errorf("ensemble.enabled requires at least 2 enabled scanners (got %d active out of %d configured)", active, len(e.Scanners)))
-		}
-		if e.Arbiter == nil {
-			errs = append(errs, fmt.Errorf("ensemble.enabled requires ensemble.arbiter to be configured"))
-		}
+	if countEnabledScanners(e.Scanners) > 0 && e.Arbiter == nil {
+		errs = append(errs, fmt.Errorf("ensemble.scanners requires ensemble.arbiter to be configured"))
 	}
 	seenNames := map[string]struct{}{}
 	for i, s := range e.Scanners {

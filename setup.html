@@ -364,11 +364,8 @@
 
 <div class="panel">
   <h2>Ensemble <span style="color:var(--text-dim);font-weight:400;font-size:14px">(optional)</span></h2>
-  <p class="hint">Fan out the review to multiple scanners and let an arbiter dedupe and classify their findings. Requires at least two scanners and an arbiter.</p>
+  <p class="hint">Fan out the review to one or more scanners. Add multiple scanners (or bump iterations on a single scanner) to get parallel/iterative coverage; the arbiter dedupes and classifies findings before they're rendered.</p>
   <div class="row">
-    <label style="text-transform:none;font-size:13px;color:var(--text);font-weight:400;display:flex;align-items:center;gap:8px;margin-bottom:8px">
-      <input type="checkbox" id="ensembleEnabled"> Enable ensemble mode
-    </label>
     <label style="text-transform:none;font-size:13px;color:var(--text);font-weight:400;display:flex;align-items:center;gap:8px">
       <input type="checkbox" id="ensembleSerial"> Run scanners serially (one agent at a time)
     </label>
@@ -439,7 +436,6 @@ const state = {
   activeProvider: "",
   activeModel: "",
   ensemble: {
-    enabled: false,
     serial: false,
     scanners: [],        // [{ id, name, provider, model, iterations }]
     arbiter: { provider: "", model: "", mode: "" },
@@ -795,7 +791,6 @@ function removeScanner(id) {
 }
 
 function renderEnsemble() {
-  $("ensembleEnabled").checked = !!state.ensemble.enabled;
   $("ensembleSerial").checked = !!state.ensemble.serial;
   const list = $("scannersList");
   list.innerHTML = "";
@@ -868,10 +863,6 @@ function scannerRow(s) {
 }
 
 $("addScanner").addEventListener("click", () => addScanner());
-$("ensembleEnabled").addEventListener("change", (e) => {
-  state.ensemble.enabled = e.target.checked;
-  scheduleRender();
-});
 $("ensembleSerial").addEventListener("change", (e) => {
   state.ensemble.serial = e.target.checked;
   scheduleRender();
@@ -920,8 +911,8 @@ function buildConfig() {
     cfg.model = state.activeModel;
   }
   const e = state.ensemble;
-  if (e.enabled || e.scanners.length > 0 || e.arbiter.provider || e.arbiter.model) {
-    const ens = { enabled: !!e.enabled };
+  if (e.scanners.length > 0 || e.arbiter.provider || e.arbiter.model) {
+    const ens = {};
     if (e.serial) ens.serial = true;
     if (e.scanners.length > 0) {
       ens.scanners = e.scanners
@@ -993,7 +984,6 @@ function importConfig(cfg) {
   state.activeProvider = "";
   state.activeModel = "";
   state.ensemble = {
-    enabled: false,
     serial: false,
     scanners: [],
     arbiter: { provider: "", model: "", mode: "" },
@@ -1077,7 +1067,6 @@ function importConfig(cfg) {
   // Hydrate ensemble block (fork extension).
   if (cfg.ensemble && typeof cfg.ensemble === "object") {
     const ens = cfg.ensemble;
-    state.ensemble.enabled = !!ens.enabled;
     state.ensemble.serial = !!ens.serial;
     if (Array.isArray(ens.scanners)) {
       for (const s of ens.scanners) {

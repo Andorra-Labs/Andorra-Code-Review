@@ -35,6 +35,9 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  # issues: write covers the createComment fallback the post-review step
+  # uses when createReview fails or there are no inline comments to attach.
+  issues: write
   actions: read
 
 jobs:
