@@ -378,6 +378,14 @@ const PRESET_NAMES = new Set([
   "volcengine", "z-ai",
 ]);
 
+// Return the canonical lowercase preset name if `name` matches a preset
+// case-insensitively; otherwise return null.
+function canonicalPresetName(name) {
+  const lower = String(name).toLowerCase();
+  if (PRESET_NAMES.has(lower)) return lower;
+  return null;
+}
+
 function findProvider(name) {
   return state.providers.find((p) => p.name === name);
 }
@@ -410,16 +418,26 @@ function scheduleRender() {
 const PROVIDER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const PROVIDER_NAME_HINT = "Use letters, numbers, hyphens and underscores only.";
 
-function validateProviderName(input, msgEl) {
+function validateProviderName(input, msgEl, selfId) {
   const v = input.value.trim();
-  if (!v || PROVIDER_NAME_RE.test(v)) {
+  if (!v) {
     msgEl.textContent = "";
     input.classList.remove("invalid");
     return true;
   }
-  msgEl.textContent = PROVIDER_NAME_HINT;
-  input.classList.add("invalid");
-  return false;
+  if (!PROVIDER_NAME_RE.test(v)) {
+    msgEl.textContent = PROVIDER_NAME_HINT;
+    input.classList.add("invalid");
+    return false;
+  }
+  if (state.providers.some((p) => p.id !== selfId && p.name === v)) {
+    msgEl.textContent = "This alias is already in use.";
+    input.classList.add("invalid");
+    return false;
+  }
+  msgEl.textContent = "";
+  input.classList.remove("invalid");
+  return true;
 }
 
 function validateURL(input, msgEl) {
@@ -542,7 +560,7 @@ function providerCard(p) {
         }
         renderActiveSelects();
       }
-      if (field === "name") validateProviderName(el, card.querySelector('[data-field="name-validation"]'));
+      if (field === "name") validateProviderName(el, card.querySelector('[data-field="name-validation"]'), p.id);
       if (field === "url") validateURL(el, card.querySelector('[data-field="url-validation"]'));
       scheduleRender();
     });
@@ -580,6 +598,9 @@ function renderModels(card, p) {
     x.title = "Remove model";
     x.addEventListener("click", () => {
       p.models = p.models.filter((mm) => mm !== m);
+      if (state.activeProvider === p.name && state.activeModel === m) {
+        state.activeModel = "";
+      }
       renderModels(card, p);
       renderActiveSelects();
       scheduleRender();
@@ -653,8 +674,9 @@ function buildConfig() {
     if (p.extra_body && typeof p.extra_body === "object" && Object.keys(p.extra_body).length > 0) {
       entry.extra_body = JSON.parse(JSON.stringify(p.extra_body));
     }
-    if (PRESET_NAMES.has(p.name)) {
-      cfg.providers[p.name] = entry;
+    const preset = canonicalPresetName(p.name);
+    if (preset) {
+      cfg.providers[preset] = entry;
     } else {
       cfg.custom_providers[p.name] = entry;
     }
@@ -662,7 +684,7 @@ function buildConfig() {
   if (Object.keys(cfg.providers).length === 0) delete cfg.providers;
   if (Object.keys(cfg.custom_providers).length === 0) delete cfg.custom_providers;
   if (state.activeProvider && state.activeModel) {
-    cfg.provider = state.activeProvider;
+    cfg.provider = canonicalPresetName(state.activeProvider) || state.activeProvider;
     cfg.model = state.activeModel;
   }
   return cfg;
@@ -686,6 +708,24 @@ function maskConfig(cfg) {
   return mask(cfg);
 }
 
+function isConfigValid() {
+  // Provider names must be valid and unique; non-empty URLs must parse.
+  const seen = new Set();
+  for (const p of state.providers) {
+    if (!p.name || !PROVIDER_NAME_RE.test(p.name)) return false;
+    if (seen.has(p.name)) return false;
+    seen.add(p.name);
+    if (p.url) {
+      try {
+        new URL(p.url);
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 function render() {
   $("preview").textContent = JSON.stringify(maskConfig(buildConfig()), null, 2);
 }
@@ -702,7 +742,9 @@ function importConfig(cfg) {
 
   const cp = (cfg.custom_providers && typeof cfg.custom_providers === "object") ? cfg.custom_providers : {};
   const providers = (cfg.providers && typeof cfg.providers === "object") ? cfg.providers : {};
-  const merge = Object.assign({}, providers, cp);
+  // Preset `providers` take precedence over `custom_providers` when the same
+  // alias appears in both sections.
+  const merge = Object.assign({}, cp, providers);
 
   for (const [name, raw] of Object.entries(merge)) {
     if (!raw || typeof raw !== "object") continue;
@@ -813,6 +855,10 @@ $("importFile").addEventListener("change", (e) => {
 /* ───── download / copy ───────────────────────────────────────────────── */
 
 $("downloadBtn").addEventListener("click", () => {
+  if (!isConfigValid()) {
+    alert("Please fix invalid provider names or URLs before downloading.");
+    return;
+  }
   const blob = new Blob([JSON.stringify(buildConfig(), null, 2) + "\n"], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -825,6 +871,10 @@ $("downloadBtn").addEventListener("click", () => {
 });
 
 $("copyBtn").addEventListener("click", async () => {
+  if (!isConfigValid()) {
+    alert("Please fix invalid provider names or URLs before copying.");
+    return;
+  }
   const btn = $("copyBtn");
   const original = btn.textContent;
   try {

@@ -5,30 +5,27 @@
 # @alibaba-group/open-code-review npm package. For `issue_comment` triggers
 # (which have repository secrets), the binary is built from the trusted base
 # ref; the PR head is only fetched as a git ref and treated as review data.
-# For `pull_request` triggers (no fork secrets) the binary is built from the
-# PR head so review-tool changes in the PR are live-tested.
+# For `pull_request` triggers from branches in this repository (non-fork), the
+# binary is built from the PR head so review-tool changes are live-tested.
 #
 # Triggers:
 #   - PR opened, synchronized, reopened, or marked ready_for_review
 #   - Comment on PR containing '/open-code-review', '@open-code-review' or '@ocr'
 #
-# Required repository variables:
-#   LLM_PROVIDER       - "bedrock" or "spark" (default: bedrock)
-#   OCR_LLM_MODEL      - Model name for Bedrock
-#   OCR_SPARK_LLM_MODEL - Model name for Spark
-#
-# Required secrets:
-#   OCR_LLM_AUTH_TOKEN - Auth token for Bedrock
-#   OCR_SPARK_LLM_AUTH_TOKEN - Auth token for Spark
+# Required repository variables / secrets:
+#   vars.OCR_LLM_URL or secrets.OCR_LLM_URL - LLM endpoint URL
+#   secrets.OCR_LLM_AUTH_TOKEN               - API key / auth token
+#   vars.OCR_LLM_MODEL or secrets.OCR_LLM_MODEL - Model id
 #
 # Optional:
-#   vars.OCR_LLM_URL or secrets.OCR_LLM_URL - Bedrock LLM URL
-#   vars.OCR_LLM_USE_ANTHROPIC - Use Anthropic mode (default: false)
-#   secrets.TS_OAUTH_CLIENT_ID, secrets.TS_OAUTH_SECRET - Tailscale for Spark
+#   vars.OCR_LLM_PROTOCOL - "anthropic" or "openai"; inferred from the URL
+#                           when omitted (anthropic/claude -> anthropic,
+#                           otherwise openai).
 #
 # Fork PR note: `pull_request` events for fork PRs do not have access to
-# repository secrets. Fork PR authors should trigger review via the comment
-# flow (e.g. `@ocr`) which runs on `issue_comment` and has secret access.
+# repository secrets, so this job skips them. Fork PR authors should trigger
+# review via the comment flow (e.g. `@ocr`) which runs on `issue_comment` and
+# has secret access.
 
 name: Andorra Review
 
@@ -56,12 +53,13 @@ permissions:
 jobs:
   code-review:
     # ubuntu-slim is the cheapest 1-core runner; sufficient for git fetch,
-    # the Go build, and a single LLM round-trip. Spark needs the Tailscale
-    # action, which requires apt/sudo/daemon control that the slim image
-    # doesn't provide — fall back to ubuntu-latest only in that case.
-    runs-on: ${{ contains(fromJSON('["spark", "Spark", "SPARK", " spark", "spark ", " spark "]'), vars.LLM_PROVIDER) && 'ubuntu-latest' || 'ubuntu-slim' }}
+    # the Go build, and a single LLM round-trip.
+    runs-on: ubuntu-slim
     if: |
-      github.event_name == 'pull_request' ||
+      (
+        github.event_name == 'pull_request' &&
+        !github.event.pull_request.head.repo.fork
+      ) ||
       (
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
@@ -179,118 +177,51 @@ jobs:
           sudo install -m 0755 dist/opencodereview /usr/local/bin/ocr
           ocr --version || ocr -v || true
 
-      - name: Resolve LLM provider
-        id: llm-provider
+      - name: Configure OCR
         shell: bash
         env:
-          LLM_PROVIDER_FROM_VAR: ${{ vars.LLM_PROVIDER }}
+          OCR_LLM_URL_VAR: ${{ vars.OCR_LLM_URL }}
+          OCR_LLM_URL_SECRET: ${{ secrets.OCR_LLM_URL }}
+          OCR_LLM_AUTH_TOKEN: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          OCR_LLM_MODEL_VAR: ${{ vars.OCR_LLM_MODEL }}
+          OCR_LLM_MODEL_SECRET: ${{ secrets.OCR_LLM_MODEL }}
+          OCR_LLM_PROTOCOL: ${{ vars.OCR_LLM_PROTOCOL }}
         run: |
-          PROVIDER="$(printf '%s' "${LLM_PROVIDER_FROM_VAR:-bedrock}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | tr -d '"' | tr -d "'")"
-          echo "Resolved LLM provider: $PROVIDER"
-          if [ "$PROVIDER" != "bedrock" ] && [ "$PROVIDER" != "spark" ]; then
-            echo "Invalid LLM_PROVIDER: $PROVIDER"
-            echo "Set repository variable LLM_PROVIDER to exactly bedrock or spark."
+          set -e
+          URL="${OCR_LLM_URL_VAR:-$OCR_LLM_URL_SECRET}"
+          MODEL="${OCR_LLM_MODEL_VAR:-$OCR_LLM_MODEL_SECRET}"
+          PROTOCOL="${OCR_LLM_PROTOCOL:-}"
+          if [ -z "$URL" ]; then
+            echo "ERROR: vars.OCR_LLM_URL or secrets.OCR_LLM_URL is required"
             exit 1
           fi
-          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
-
-      - name: Connect to Tailscale for Spark
-        if: ${{ steps.llm-provider.outputs.provider == 'spark' }}
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
-
-      - name: Wait for Spark tailnet peer
-        if: ${{ steps.llm-provider.outputs.provider == 'spark' }}
-        shell: bash
-        # Tailscale peer info is eventually consistent; the LLM test step
-        # below can fail with a transient name-resolution or connection error
-        # if it runs before the spark peer is reachable. We only need
-        # reachability (HTTP works over DERP relays too), so pass
-        # --until-direct=false — otherwise a peer that is reachable only via
-        # DERP returns non-zero with "direct connection not established"
-        # and would fail this check unnecessarily.
-        run: |
-          for i in $(seq 1 30); do
-            if tailscale ping --until-direct=false -c 1 spark.tail93d320.ts.net >/dev/null 2>&1; then
-              echo "Spark peer reachable after ${i} attempt(s)"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "ERROR: Spark peer not reachable after 60s"
-          exit 1
-
-      - name: Configure OCR (non-secret only)
-        # Resolve URL / model / use_anthropic from repository variables (with
-        # secret fallbacks for legacy installations) and expose them as job
-        # env vars via $GITHUB_ENV. The auth token is intentionally NOT
-        # written here — it goes straight from secrets to the steps that
-        # need it via step-level `env:`, so the secret never lands in
-        # ~/.opencodereview/config.json on the runner.
-        shell: bash
-        env:
-          LLM_PROVIDER: ${{ steps.llm-provider.outputs.provider }}
-          BEDROCK_LLM_URL_FROM_VAR: ${{ vars.OCR_LLM_URL }}
-          BEDROCK_LLM_URL_FROM_SECRET: ${{ secrets.OCR_LLM_URL }}
-          BEDROCK_LLM_AUTH_TOKEN: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
-          BEDROCK_LLM_MODEL_FROM_VAR: ${{ vars.OCR_LLM_MODEL }}
-          BEDROCK_LLM_MODEL_FROM_SECRET: ${{ secrets.OCR_LLM_MODEL }}
-          BEDROCK_LLM_USE_ANTHROPIC_FROM_VAR: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
-          BEDROCK_LLM_USE_ANTHROPIC_FROM_SECRET: ${{ secrets.OCR_LLM_USE_ANTHROPIC }}
-          SPARK_LLM_URL: http://spark.tail93d320.ts.net:9090/v1
-          SPARK_LLM_AUTH_TOKEN: ${{ secrets.OCR_SPARK_LLM_AUTH_TOKEN }}
-          SPARK_LLM_MODEL: ${{ vars.OCR_SPARK_LLM_MODEL }}
-        run: |
-          if [ "$LLM_PROVIDER" = "spark" ]; then
-            if [ -z "$SPARK_LLM_AUTH_TOKEN" ]; then
-              echo "ERROR: secrets.OCR_SPARK_LLM_AUTH_TOKEN is required for Spark provider."
-              exit 1
-            fi
-            if [ -z "$SPARK_LLM_MODEL" ]; then
-              echo "WARNING: vars.OCR_SPARK_LLM_MODEL is not set, using default model"
-            fi
-            URL="$SPARK_LLM_URL"
-            MODEL="${SPARK_LLM_MODEL:-Qwen3.5-122B-A10B-FP8}"
-            USE_ANTHROPIC="false"
-          else
-            URL="${BEDROCK_LLM_URL_FROM_VAR:-$BEDROCK_LLM_URL_FROM_SECRET}"
-            MODEL="${BEDROCK_LLM_MODEL_FROM_VAR:-$BEDROCK_LLM_MODEL_FROM_SECRET}"
-            USE_ANTHROPIC="${BEDROCK_LLM_USE_ANTHROPIC_FROM_VAR:-${BEDROCK_LLM_USE_ANTHROPIC_FROM_SECRET:-false}}"
-            if [ -z "$URL" ]; then
-              echo "Missing Bedrock LLM URL. Set vars.OCR_LLM_URL or secrets.OCR_LLM_URL."
-              exit 1
-            fi
-            if [ -z "$BEDROCK_LLM_AUTH_TOKEN" ]; then
-              echo "Missing secrets.OCR_LLM_AUTH_TOKEN."
-              exit 1
-            fi
-            if [ -z "$MODEL" ]; then
-              echo "Missing OCR_LLM_MODEL. Set vars.OCR_LLM_MODEL or secrets.OCR_LLM_MODEL."
-              exit 1
-            fi
+          if [ -z "$OCR_LLM_AUTH_TOKEN" ]; then
+            echo "ERROR: secrets.OCR_LLM_AUTH_TOKEN is required"
+            exit 1
           fi
-          {
-            echo "OCR_LLM_URL=$URL"
-            echo "OCR_LLM_MODEL=$MODEL"
-            echo "OCR_USE_ANTHROPIC=$USE_ANTHROPIC"
-          } >> "$GITHUB_ENV"
+          if [ -z "$MODEL" ]; then
+            echo "ERROR: vars.OCR_LLM_MODEL or secrets.OCR_LLM_MODEL is required"
+            exit 1
+          fi
+          if [ -z "$PROTOCOL" ]; then
+            case "$URL" in
+              *anthropic*|*claude*) PROTOCOL="anthropic" ;;
+              *) PROTOCOL="openai" ;;
+            esac
+          fi
+          ocr config set provider default
+          ocr config set model "$MODEL"
+          ocr config set custom_providers.default.url "$URL"
+          ocr config set custom_providers.default.api_key "$OCR_LLM_AUTH_TOKEN"
+          ocr config set custom_providers.default.protocol "$PROTOCOL"
+          ocr config set custom_providers.default.models "[\"$MODEL\"]"
 
       - name: Test OCR connection
-        env:
-          # Auth token is passed via step-level env so it never lands in
-          # the on-disk config file. See the "Configure OCR (non-secret
-          # only)" step above for the rationale.
-          OCR_LLM_TOKEN: ${{ steps.llm-provider.outputs.provider == 'spark' && secrets.OCR_SPARK_LLM_AUTH_TOKEN || secrets.OCR_LLM_AUTH_TOKEN }}
         run: ocr llm test
 
       - name: Run OpenCodeReview
         id: ocr-run
         shell: bash
-        env:
-          OCR_LLM_TOKEN: ${{ steps.llm-provider.outputs.provider == 'spark' && secrets.OCR_SPARK_LLM_AUTH_TOKEN || secrets.OCR_LLM_AUTH_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_REF="${{ github.event.pull_request.base.ref }}"
