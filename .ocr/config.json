@@ -3,6 +3,7 @@
     "Spark": {
       "protocol": "openai",
       "url": "http://spark.tail93d320.ts.net:9090",
+      "api_key": "${env:OCR_SPARK_API_KEY}",
       "models": [
         "Qwen3.6-27B-Text-NVFP4-MTP"
       ]
