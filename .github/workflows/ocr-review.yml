@@ -282,7 +282,11 @@ jobs:
           cat /tmp/ocr-result.json || true
 
       - name: Post OCR review to PR
-        if: always()
+        # Run on success and on real failures (so OCR errors surface on the
+        # PR), but NOT on cancellation. A newer push or @ocr comment via
+        # concurrency cancel-in-progress would otherwise spam a stale
+        # "produced no output" comment from the run that just got cancelled.
+        if: ${{ !cancelled() }}
         uses: actions/github-script@v7
         with:
           script: |
