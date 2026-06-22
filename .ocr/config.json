@@ -1,0 +1,29 @@
+{
+  "custom_providers": {
+    "Spark": {
+      "protocol": "openai",
+      "url": "http://spark.tail93d320.ts.net:9090",
+      "models": [
+        "Qwen3.6-27B-Text-NVFP4-MTP"
+      ]
+    }
+  },
+  "provider": "Spark",
+  "model": "Qwen3.6-27B-Text-NVFP4-MTP",
+  "ensemble": {
+    "enabled": false,
+    "serial": true,
+    "scanners": [
+      {
+        "name": "",
+        "provider": "Spark",
+        "model": "Qwen3.6-27B-Text-NVFP4-MTP",
+        "iterations": 3
+      }
+    ],
+    "arbiter": {
+      "provider": "Spark",
+      "model": "Qwen3.6-27B-Text-NVFP4-MTP"
+    }
+  }
+}
