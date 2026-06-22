@@ -911,10 +911,17 @@ function buildConfig() {
     cfg.model = state.activeModel;
   }
   const e = state.ensemble;
-  if (e.scanners.length > 0 || e.arbiter.provider || e.arbiter.model) {
+  // Scanners without an arbiter provider make `ocr review` fail validation
+  // (ensemble.scanners requires ensemble.arbiter), so suppress the scanner
+  // block until an arbiter is configured. The user still sees their
+  // scanner inputs in the form; they just don't land in the output until
+  // they pick an arbiter provider.
+  const hasArbiterProvider = !!e.arbiter.provider;
+  const emitScanners = e.scanners.length > 0 && hasArbiterProvider;
+  if (emitScanners || e.arbiter.provider || e.arbiter.model) {
     const ens = {};
     if (e.serial) ens.serial = true;
-    if (e.scanners.length > 0) {
+    if (emitScanners) {
       ens.scanners = e.scanners
         .filter((s) => s.name || s.provider || s.model)
         .map((s) => {
@@ -929,7 +936,7 @@ function buildConfig() {
       if (e.arbiter.model) ens.arbiter.model = e.arbiter.model;
       if (e.arbiter.mode) ens.arbiter.mode = e.arbiter.mode;
     }
-    cfg.ensemble = ens;
+    if (Object.keys(ens).length > 0) cfg.ensemble = ens;
   }
   return cfg;
 }

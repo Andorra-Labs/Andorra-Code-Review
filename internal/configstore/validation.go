@@ -16,7 +16,7 @@ func Validate(ext *AndorraExt) []error {
 	}
 	var errs []error
 	e := ext.Ensemble
-	if countEnabledScanners(e.Scanners) > 0 && e.Arbiter == nil {
+	if CountEnabledScanners(e.Scanners) > 0 && e.Arbiter == nil {
 		errs = append(errs, fmt.Errorf("ensemble.scanners requires ensemble.arbiter to be configured"))
 	}
 	seenNames := map[string]struct{}{}
@@ -94,11 +94,12 @@ func validArbiterMode(mode string) bool {
 	return false
 }
 
-// countEnabledScanners returns the number of ScannerSpec entries whose
+// CountEnabledScanners returns the number of ScannerSpec entries whose
 // Enabled flag is unset (treated as active) or true. Used by Validate so a
 // config with two scanners — one Enabled: false — surfaces the problem at
-// config time rather than at review time.
-func countEnabledScanners(specs []ScannerSpec) int {
+// config time rather than at review time, and by routing logic so an
+// all-disabled scanner list falls back to legacy review instead of failing.
+func CountEnabledScanners(specs []ScannerSpec) int {
 	n := 0
 	for _, s := range specs {
 		if s.Enabled == nil || *s.Enabled {

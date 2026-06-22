@@ -154,10 +154,12 @@ func parseCSV(s string) []string {
 }
 
 // shouldRunEnsemble decides whether the ensemble path applies. Called from
-// dispatch() before runReview(). Any config with at least one ensemble
-// scanner configured routes to the ensemble path — even if the arbiter
-// is missing — so that runAndorraReview surfaces a clear validation
-// error rather than silently falling back to single-model review.
+// dispatch() before runReview(). Any config with at least one ENABLED
+// ensemble scanner routes to the ensemble path — even if the arbiter is
+// missing — so that runAndorraReview surfaces a clear validation error
+// rather than silently falling back to single-model review. Configs whose
+// scanners are all marked enabled:false fall through to legacy so users
+// can suspend ensemble reviews without deleting their saved definitions.
 func shouldRunEnsemble(args []string) bool {
 	eopts, _ := splitEnsembleArgs(args)
 	if eopts.forceLegacy {
@@ -186,7 +188,7 @@ func shouldRunEnsemble(args []string) bool {
 	if ext == nil || ext.Ensemble == nil {
 		return false
 	}
-	return len(ext.Ensemble.Scanners) > 0
+	return configstore.CountEnabledScanners(ext.Ensemble.Scanners) > 0
 }
 
 // isRepoLocalConfigPath reports whether path is the discovered repo-local
