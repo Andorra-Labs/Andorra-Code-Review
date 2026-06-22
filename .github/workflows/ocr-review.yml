@@ -198,7 +198,13 @@ jobs:
           echo "ERROR: Spark peer not reachable after 60s"
           exit 1
 
-      - name: Configure OCR
+      - name: Configure OCR (non-secret only)
+        # Resolve URL / model / use_anthropic from repository variables (with
+        # secret fallbacks for legacy installations) and expose them as job
+        # env vars via $GITHUB_ENV. The auth token is intentionally NOT
+        # written here — it goes straight from secrets to the steps that
+        # need it via step-level `env:`, so the secret never lands in
+        # ~/.opencodereview/config.json on the runner.
         shell: bash
         env:
           LLM_PROVIDER: ${{ steps.llm-provider.outputs.provider }}
@@ -221,15 +227,14 @@ jobs:
             if [ -z "$SPARK_LLM_MODEL" ]; then
               echo "WARNING: vars.OCR_SPARK_LLM_MODEL is not set, using default model"
             fi
-            ocr config set llm.url "$SPARK_LLM_URL"
-            ocr config set llm.auth_token "$SPARK_LLM_AUTH_TOKEN"
-            ocr config set llm.model "${SPARK_LLM_MODEL:-Qwen3.5-122B-A10B-FP8}"
-            ocr config set llm.use_anthropic "false"
+            URL="$SPARK_LLM_URL"
+            MODEL="${SPARK_LLM_MODEL:-Qwen3.5-122B-A10B-FP8}"
+            USE_ANTHROPIC="false"
           else
-            BEDROCK_LLM_URL="${BEDROCK_LLM_URL_FROM_VAR:-$BEDROCK_LLM_URL_FROM_SECRET}"
-            BEDROCK_LLM_MODEL="${BEDROCK_LLM_MODEL_FROM_VAR:-$BEDROCK_LLM_MODEL_FROM_SECRET}"
-            BEDROCK_LLM_USE_ANTHROPIC="${BEDROCK_LLM_USE_ANTHROPIC_FROM_VAR:-$BEDROCK_LLM_USE_ANTHROPIC_FROM_SECRET}"
-            if [ -z "$BEDROCK_LLM_URL" ]; then
+            URL="${BEDROCK_LLM_URL_FROM_VAR:-$BEDROCK_LLM_URL_FROM_SECRET}"
+            MODEL="${BEDROCK_LLM_MODEL_FROM_VAR:-$BEDROCK_LLM_MODEL_FROM_SECRET}"
+            USE_ANTHROPIC="${BEDROCK_LLM_USE_ANTHROPIC_FROM_VAR:-${BEDROCK_LLM_USE_ANTHROPIC_FROM_SECRET:-false}}"
+            if [ -z "$URL" ]; then
               echo "Missing Bedrock LLM URL. Set vars.OCR_LLM_URL or secrets.OCR_LLM_URL."
               exit 1
             fi
@@ -237,22 +242,30 @@ jobs:
               echo "Missing secrets.OCR_LLM_AUTH_TOKEN."
               exit 1
             fi
-            if [ -z "$BEDROCK_LLM_MODEL" ]; then
+            if [ -z "$MODEL" ]; then
               echo "Missing OCR_LLM_MODEL. Set vars.OCR_LLM_MODEL or secrets.OCR_LLM_MODEL."
               exit 1
             fi
-            ocr config set llm.url "$BEDROCK_LLM_URL"
-            ocr config set llm.auth_token "$BEDROCK_LLM_AUTH_TOKEN"
-            ocr config set llm.model "$BEDROCK_LLM_MODEL"
-            ocr config set llm.use_anthropic "${BEDROCK_LLM_USE_ANTHROPIC:-false}"
           fi
+          {
+            echo "OCR_LLM_URL=$URL"
+            echo "OCR_LLM_MODEL=$MODEL"
+            echo "OCR_USE_ANTHROPIC=$USE_ANTHROPIC"
+          } >> "$GITHUB_ENV"
 
       - name: Test OCR connection
+        env:
+          # Auth token is passed via step-level env so it never lands in
+          # the on-disk config file. See the "Configure OCR (non-secret
+          # only)" step above for the rationale.
+          OCR_LLM_TOKEN: ${{ steps.llm-provider.outputs.provider == 'spark' && secrets.OCR_SPARK_LLM_AUTH_TOKEN || secrets.OCR_LLM_AUTH_TOKEN }}
         run: ocr llm test
 
       - name: Run OpenCodeReview
         id: ocr-run
         shell: bash
+        env:
+          OCR_LLM_TOKEN: ${{ steps.llm-provider.outputs.provider == 'spark' && secrets.OCR_SPARK_LLM_AUTH_TOKEN || secrets.OCR_LLM_AUTH_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_REF="${{ github.event.pull_request.base.ref }}"
