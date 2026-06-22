@@ -52,7 +52,7 @@ permissions:
 
 jobs:
   code-review:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: |
       github.event_name == 'pull_request' ||
       (
@@ -103,7 +103,7 @@ jobs:
             }
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           # For issue_comment events the head SHA lives in the contributor's
