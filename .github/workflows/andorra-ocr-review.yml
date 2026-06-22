@@ -196,6 +196,17 @@ jobs:
           echo "TS_OAUTH_CLIENT_ID length: ${#TS_OAUTH_CLIENT_ID}"
           echo "TS_OAUTH_SECRET length: ${#TS_OAUTH_SECRET}"
 
+      - name: Sanity check resolved Tailscale OAuth lengths
+        if: steps.detect.outputs.present == 'true'
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ vars.TS_OAUTH_SECRET || secrets.TS_OAUTH_SECRET }}
+        run: |
+          # Print the lengths of the credentials that will be passed to the
+          # Tailscale action. Values remain masked by GitHub if non-empty.
+          echo "Resolved TS_OAUTH_CLIENT_ID length: ${#TS_OAUTH_CLIENT_ID}"
+          echo "Resolved TS_OAUTH_SECRET length: ${#TS_OAUTH_SECRET}"
+
       - name: Connect to Tailscale (so the runner can reach *.ts.net hosts
               like the Spark LLM endpoint configured in .ocr/config.json)
         if: steps.detect.outputs.present == 'true'
