@@ -109,7 +109,7 @@ Converters:
 - `FromComment(c model.LlmComment, src Source, idx int) RawFinding`
 - `ToComment(f FinalFinding, opts RenderOptions) model.LlmComment` — flattens to legacy shape for existing renderers. Prefixes provenance/verdict only when `opts.ShowProvenance` / `opts.ShowVerdict` true.
 
-This isolates ensemble concerns from `model.LlmComment` (which the GitHub workflow at `.github/workflows/ocr-review.yml` already parses) and disambiguates "no verdict" between single-model mode and ensemble accepted-by-default.
+This isolates ensemble concerns from `model.LlmComment` (which the GitHub workflow at `.github/workflows/andorra-ocr-review.yml` already parses) and disambiguates "no verdict" between single-model mode and ensemble accepted-by-default.
 
 ## Scanner orchestrator
 
@@ -226,7 +226,7 @@ The web UI never pushes to GitHub itself — it's local + no-auth by design. Exp
 
 4. **Web UI download endpoint** — `GET /export?mode=placeholder|strip` returns the exported JSON as a download (`Content-Disposition: attachment; filename=ocr.config.json`). Same logic as the CLI command. A button on `/` reads "Download config for CI" with a brief explainer.
 
-5. **Workflow simplification** — `.github/workflows/ocr-review.yml` shrinks from many `ocr config set ...` calls to:
+5. **Workflow simplification** — `.github/workflows/andorra-ocr-review.yml` shrinks from many `ocr config set ...` calls to:
    - `checkout` (brings `.ocr/config.json`)
    - export only the secrets the config references (one env-var per scanner)
    - `ocr review --from origin/${{ base }} --to ${{ sha }} --format json`
