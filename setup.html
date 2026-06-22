@@ -154,6 +154,26 @@
     padding: 0;
   }
   .model-chip button:hover { color: var(--danger); }
+  .model-input-row {
+    display: flex;
+    gap: 8px;
+  }
+  .model-input-row input { flex: 1; }
+  button.model-add-btn {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 0 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button.model-add-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
   .icon-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -535,7 +555,10 @@ function providerCard(p) {
     <div class="row">
       <label>Models</label>
       <div class="model-list" data-field="models"></div>
-      <input type="text" data-field="model-input" placeholder="Type a model id and press Enter (e.g. claude-sonnet-4-6)">
+      <div class="model-input-row">
+        <input type="text" data-field="model-input" placeholder="Type a model id (e.g. claude-sonnet-4-6)">
+        <button type="button" class="model-add-btn" data-field="model-add">Add</button>
+      </div>
     </div>
   `;
 
@@ -570,17 +593,21 @@ function providerCard(p) {
     scheduleRender();
   });
   const modelInput = card.querySelector('[data-field="model-input"]');
+  const commitModel = () => {
+    const v = modelInput.value.trim();
+    if (v && !p.models.includes(v)) p.models.push(v);
+    modelInput.value = "";
+    renderModels(card, p);
+    renderActiveSelects();
+    scheduleRender();
+  };
   modelInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      const v = modelInput.value.trim();
-      if (v && !p.models.includes(v)) p.models.push(v);
-      modelInput.value = "";
-      renderModels(card, p);
-      renderActiveSelects();
-      scheduleRender();
+      commitModel();
     }
   });
+  card.querySelector('[data-field="model-add"]').addEventListener("click", commitModel);
 
   return card;
 }
