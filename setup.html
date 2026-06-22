@@ -89,6 +89,18 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(88,166,255,0.2);
   }
+  input.invalid {
+    border-color: var(--danger);
+  }
+  input.invalid:focus {
+    box-shadow: 0 0 0 3px rgba(248,81,73,0.2);
+  }
+  .validation-msg {
+    color: var(--danger);
+    font-size: 12px;
+    margin-top: 4px;
+    min-height: 18px;
+  }
   .row { margin-bottom: 12px; }
   .row:last-child { margin-bottom: 0; }
   /* Provider card */
@@ -459,6 +471,25 @@ function renderProviders() {
   for (const p of state.providers) list.appendChild(providerCard(p));
 }
 
+function validateURL(input, msgEl) {
+  const v = input.value.trim();
+  if (!v) {
+    msgEl.textContent = "";
+    input.classList.remove("invalid");
+    return true;
+  }
+  try {
+    new URL(v);
+    msgEl.textContent = "";
+    input.classList.remove("invalid");
+    return true;
+  } catch (_) {
+    msgEl.textContent = "Please enter a valid URL (e.g. https://api.example.com/v1)";
+    input.classList.add("invalid");
+    return false;
+  }
+}
+
 function providerCard(p) {
   const card = document.createElement("div");
   card.className = "provider-card";
@@ -487,6 +518,7 @@ function providerCard(p) {
     <div class="row">
       <label>Base URL</label>
       <input type="url" data-field="url" placeholder="https://api.example.com/v1">
+      <div class="validation-msg" data-field="url-validation"></div>
     </div>
     <div class="row">
       <label>Models</label>
@@ -516,6 +548,7 @@ function providerCard(p) {
         if (state.arbiter.provider === oldName) state.arbiter.provider = newName;
         refreshWorkerSelects();
       }
+      if (field === "url") validateURL(el, card.querySelector('[data-field="url-validation"]'));
       render();
     });
   });
