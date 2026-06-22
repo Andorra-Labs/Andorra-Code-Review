@@ -1,4 +1,4 @@
-# Andorra OCR ensemble review on pull requests.
+# Andorra Review ensemble review on pull requests.
 #
 # === SECURITY MODEL ===
 # This workflow is `pull_request_target`-triggered so it has secret access
@@ -26,7 +26,7 @@
 #                 OCR_BEDROCK_API_KEY / OCR_BEDROCK_REGION (whichever your
 #                 .ocr/config.json placeholders reference) as repo or org
 #                 secrets.
-name: Andorra OCR Review
+name: Andorra Review
 
 on:
   pull_request_target:
@@ -54,7 +54,7 @@ jobs:
           if [ -f .ocr/config.json ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::.ocr/config.json not present in base ref — skipping Andorra OCR review."
+            echo "::notice::.ocr/config.json not present in base ref — skipping Andorra Review review."
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -103,7 +103,7 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Install Andorra OCR from a pinned fork release
+      - name: Install Andorra Review from a pinned fork release
         if: steps.detect.outputs.present == 'true'
         env:
           # SECURITY: ANDORRA_OCR_REF must be an IMMUTABLE ref — a release
@@ -257,8 +257,8 @@ jobs:
               : '';
 
             const summary = data.ensemble
-              ? `**Andorra OCR ensemble:** ${data.ensemble.scanners.length} scanners, ${data.ensemble.groups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
-              : `**Andorra OCR:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
+              ? `**Andorra Review ensemble:** ${data.ensemble.scanners.length} scanners, ${data.ensemble.groups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
+              : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
             const body = summary + warningLine + unresolvedSection;
 

@@ -1,4 +1,4 @@
-# OpenCodeReview - GitHub Actions PR Auto-Review
+# Andorra Review - GitHub Actions PR Auto-Review
 #
 # The OCR binary is built from this repo's source (cmd/opencodereview) so the
 # workflow can exercise the in-tree code rather than Alibaba's published
@@ -91,7 +91,7 @@ jobs:
             core.setOutput('base_ref', pr.base.ref);
             core.setOutput('head_sha', pr.head.sha);
 
-      - name: React OCR started
+      - name: React Andorra Review started
         uses: actions/github-script@v7
         with:
           script: |
@@ -166,7 +166,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build OCR from source
+      - name: Build Andorra Review from source
         # Build this repo's OCR binary. For pull_request events this compiles
         # the PR head so review-tool changes are live-tested. For issue_comment
         # events the checkout step already placed us on the trusted base ref,
@@ -177,7 +177,7 @@ jobs:
           sudo install -m 0755 dist/opencodereview /usr/local/bin/ocr
           ocr --version || ocr -v || true
 
-      - name: Configure OCR
+      - name: Configure Andorra Review
         shell: bash
         env:
           OCR_LLM_URL_VAR: ${{ vars.OCR_LLM_URL }}
@@ -216,10 +216,10 @@ jobs:
           ocr config set custom_providers.default.protocol "$PROTOCOL"
           ocr config set custom_providers.default.models "[\"$MODEL\"]"
 
-      - name: Test OCR connection
+      - name: Test Andorra Review connection
         run: ocr llm test
 
-      - name: Run OpenCodeReview
+      - name: Run Andorra Review
         id: ocr-run
         shell: bash
         run: |
@@ -232,7 +232,7 @@ jobs:
           fi
           echo "Reviewing ${HEAD_SHA} against origin/${BASE_REF}"
           # Capture exit status without failing the step so the post step can
-          # surface OCR errors (stderr, exit code) on the PR. Reviewers should
+          # surface Andorra Review errors (stderr, exit code) on the PR. Reviewers should
           # not have to open Actions logs to learn why coverage is missing.
           set +e
           ocr review \
@@ -250,8 +250,8 @@ jobs:
           cat /tmp/ocr-stderr.log || true
           cat /tmp/ocr-result.json || true
 
-      - name: Post OCR review to PR
-        # Run on success and on real failures (so OCR errors surface on the
+      - name: Post Andorra Review to PR
+        # Run on success and on real failures (so Andorra Review errors surface on the
         # PR), but NOT on cancellation. A newer push or @ocr comment via
         # concurrency cancel-in-progress would otherwise spam a stale
         # "produced no output" comment from the run that just got cancelled.
@@ -268,7 +268,7 @@ jobs:
             try { stderr = fs.readFileSync('/tmp/ocr-stderr.log', 'utf8'); } catch (_) { /* missing */ }
 
             function failureHeader(reason) {
-              let header = `OpenCodeReview ${reason}.`;
+              let header = `Andorra Review ${reason}.`;
               if (ocrExitCode && /^\d+$/.test(ocrExitCode) && ocrExitCode !== '0') {
                 header += ` (exit code: ${ocrExitCode})`;
               }
@@ -329,7 +329,7 @@ jobs:
             const filterDebug = formatFilterDebug(rawCount, comments.length, filteredComments);
 
             if (comments.length === 0) {
-              let body = `OpenCodeReview: No actionable issues found.\n\n`;
+              let body = `Andorra Review: No actionable issues found.\n\n`;
               body += partialCoverageBlock(parsed);
               body += filterDebug;
               await github.rest.issues.createComment({
@@ -357,7 +357,7 @@ jobs:
               }
             }
 
-            let summary = `OpenCodeReview found ${comments.length} actionable issue(s).\n\n`;
+            let summary = `Andorra Review found ${comments.length} actionable issue(s).\n\n`;
             summary += partialCoverageBlock(parsed);
             summary += `- ${inlineComments.length} inline comment(s)\n`;
             summary += `- ${summaryOnly.length} summary comment(s)\n\n`;
@@ -487,8 +487,8 @@ jobs:
                 reasonCounts[item.decision.reason] = (reasonCounts[item.decision.reason] || 0) + 1;
               }
 
-              let text = `OCR filter debug:\n`;
-              text += `- Raw OCR findings: ${rawCount}\n`;
+              let text = `Andorra Review filter debug:\n`;
+              text += `- Raw Andorra Review findings: ${rawCount}\n`;
               text += `- Posted findings: ${keptCount}\n`;
               text += `- Filtered findings: ${filtered.length}\n`;
 
@@ -544,7 +544,7 @@ jobs:
               const isPartial = (status && status !== 'completed' && status !== 'success') || warnings.length > 0;
               if (!isPartial) return '';
 
-              let block = `⚠️ OCR status: **${status || 'completed_with_warnings'}**\n\n`;
+              let block = `⚠️ Andorra Review status: **${status || 'completed_with_warnings'}**\n\n`;
               if (parsed.message) block += `${parsed.message}\n\n`;
               if (warnings.length > 0) {
                 block += `Warnings:\n`;
