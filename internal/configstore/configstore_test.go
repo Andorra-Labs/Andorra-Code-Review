@@ -218,7 +218,7 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 			Enabled: true,
 			Serial:  true,
 			Scanners: []ScannerSpec{
-				{Name: "opus", Provider: "anthropic", Model: "claude-opus-4-7", Weight: 1.5, Temperature: &temp, MaxTokens: 4096, PromptTag: "deep", Iterations: 3},
+				{Name: "opus", Provider: "anthropic", Model: "claude-opus-4-7", Weight: 1.5, Temperature: &temp, MaxTokens: 4096, PromptTag: "deep", Exhaustive: true},
 				{Name: "gpt", Provider: "openai", Model: "gpt-5.5"},
 			},
 			Arbiter: &ArbiterSpec{Provider: "anthropic", Model: "claude-opus-4-8", Mode: "per_file"},
@@ -308,20 +308,6 @@ func TestValidateAcceptsValidEnsemble(t *testing.T) {
 	}}
 	if errs := Validate(ext); len(errs) != 0 {
 		t.Errorf("Validate returned %v", errs)
-	}
-}
-
-func TestValidateRejectsNegativeIterations(t *testing.T) {
-	ext := &AndorraExt{Ensemble: &EnsembleConfig{
-		Enabled: true,
-		Scanners: []ScannerSpec{
-			{Name: "a", Provider: "anthropic", Iterations: -1},
-			{Name: "b", Provider: "openai"},
-		},
-		Arbiter: &ArbiterSpec{Provider: "anthropic"},
-	}}
-	if !containsErr(Validate(ext), "iterations") {
-		t.Errorf("expected iterations error")
 	}
 }
 

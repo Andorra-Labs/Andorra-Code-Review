@@ -13,7 +13,7 @@
 # This workflow runs with secret access on both triggers above. The safety
 # story:
 #
-#   1. The OCR binary is built from a TRUSTED REF (main of the Andorra
+#   1. The OCR binary is built from a TRUSTED REF (prod of the Andorra
 #      fork), never from PR source.
 #   2. The config file (.ocr/config.json) is read from the BASE ref. Fork
 #      PRs cannot redirect API calls or change scanner config by editing
@@ -197,14 +197,14 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         env:
           # Same source-of-truth as the install step below. Keep these two
-          # in sync if you ever move off main.
+          # in sync if you ever move off prod.
           ANDORRA_OCR_REPO: https://github.com/Andorra-Labs/Andorra-Code-Review.git
-          ANDORRA_OCR_REF: main
+          ANDORRA_OCR_REF: prod
         run: |
           set -euo pipefail
           # Resolve once so the cache key and the install both pin to the
-          # same SHA — if main moves between these two steps, the cached
-          # binary still corresponds to a real commit (not whatever main
+          # same SHA — if prod moves between these two steps, the cached
+          # binary still corresponds to a real commit (not whatever prod
           # happens to point at later).
           sha=$(git ls-remote "${ANDORRA_OCR_REPO}" "refs/heads/${ANDORRA_OCR_REF}" | cut -f1)
           if [ -z "$sha" ] || ! [[ "$sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -228,16 +228,16 @@ jobs:
       - name: Install Andorra Review (cache miss only)
         if: steps.detect.outputs.present == 'true' && steps.ocr-cache.outputs.cache-hit != 'true'
         env:
-          # SECURITY TRADEOFF: ANDORRA_OCR_REF (above) points at `main` so
+          # SECURITY TRADEOFF: ANDORRA_OCR_REF (above) points at `prod` so
           # newest pushes are picked up automatically. Because this workflow
           # runs under `pull_request_target` with secret access, anyone with
-          # push to `main` can change what trusted code runs here with those
+          # push to `prod` can change what trusted code runs here with those
           # secrets. This is acceptable for a same-team fork where everyone
-          # with push to `main` is already trusted; switch back to a pinned
+          # with push to `prod` is already trusted; switch back to a pinned
           # release tag or commit SHA if that assumption ever stops holding.
           ANDORRA_OCR_REPO: https://github.com/Andorra-Labs/Andorra-Code-Review.git
           # We always install at the SHA the cache key was derived from,
-          # never the floating `main`. This guarantees the binary in the
+          # never the floating `prod`. This guarantees the binary in the
           # cache matches the source SHA in its key.
           ANDORRA_OCR_REF: ${{ steps.ocr-sha.outputs.sha }}
         run: |
