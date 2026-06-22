@@ -547,6 +547,26 @@ func runAndorraReview(args []string) error {
 	result, err := orch.Execute(ctx)
 	if err != nil {
 		telemetry.SetAttr(span, "error", err.Error())
+		// On total scanner failure the individual errors are otherwise swallowed
+		// (JSON/agent mode silences stdout). Emit them to stderr and persist a
+		// debug trace so CI logs / artifacts show exactly what failed.
+		for _, sr := range result.Scanners {
+			if sr.Status == "error" {
+				fmt.Fprintf(os.Stderr, "[ocr] scanner %q (%s/%s) failed: %s\n", sr.Name, sr.Provider, sr.Model, sr.Err)
+				for _, w := range sr.Warnings {
+					loc := w.File
+					if loc == "" {
+						loc = w.Type
+					}
+					fmt.Fprintf(os.Stderr, "[ocr]   %s: %s\n", loc, w.Message)
+				}
+			}
+		}
+		if eopts.debugTrace != "" {
+			if traceErr := writeDebugTrace(eopts.debugTrace, result, nil); traceErr != nil {
+				fmt.Fprintf(os.Stderr, "[ocr] failed to write debug trace: %v\n", traceErr)
+			}
+		}
 		return fmt.Errorf("ensemble run failed: %w", err)
 	}
 	duration := time.Since(startTime)
