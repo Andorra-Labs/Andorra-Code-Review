@@ -14,7 +14,6 @@ import (
 //
 // Supported keys:
 //
-//	ensemble.enabled                       (bool)
 //	ensemble.scanners                      (JSON array of ScannerSpec)
 //	ensemble.arbiter.provider              (string)
 //	ensemble.arbiter.model                 (string)
@@ -27,6 +26,10 @@ import (
 //	ensemble.dedup.existing_code_exact_boost (bool)
 //	ensemble.output.default_verdicts       (JSON array or comma-separated)
 //	ensemble.output.show_provenance        (bool)
+//
+// `ensemble.enabled` is no longer supported: the ensemble path runs
+// whenever scanners are configured. To disable ensemble mode, remove
+// the scanner entries (`ocr config set ensemble.scanners '[]'`).
 func Set(ext *AndorraExt, key, value string) error {
 	if ext == nil {
 		return fmt.Errorf("nil AndorraExt")
@@ -38,11 +41,7 @@ func Set(ext *AndorraExt, key, value string) error {
 
 	switch key {
 	case "ensemble.enabled":
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return fmt.Errorf("invalid bool for ensemble.enabled: %w", err)
-		}
-		ext.Ensemble.Enabled = b
+		return fmt.Errorf("ensemble.enabled is no longer supported; ensemble mode now runs whenever scanners are configured. To disable, remove the scanners block (e.g. `ocr config set ensemble.scanners '[]'`)")
 	case "ensemble.scanners":
 		var scs []ScannerSpec
 		if err := json.Unmarshal([]byte(value), &scs); err != nil {

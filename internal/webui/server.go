@@ -404,9 +404,7 @@ func ensembleData(ext *configstore.AndorraExt, token string) map[string]any {
 
 func buildExtFromForm(r *http.Request) *configstore.AndorraExt {
 	ext := &configstore.AndorraExt{
-		Ensemble: &configstore.EnsembleConfig{
-			Enabled: r.PostFormValue("enabled") == "true",
-		},
+		Ensemble: &configstore.EnsembleConfig{},
 	}
 	// Scanners
 	for i := 0; ; i++ {

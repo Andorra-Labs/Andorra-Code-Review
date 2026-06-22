@@ -108,7 +108,6 @@ func TestEnsemblePOSTSavesValidConfig(t *testing.T) {
 	s, path := newTestServer(t)
 	form := url.Values{}
 	form.Set("csrf_token", "test-csrf-token")
-	form.Set("enabled", "true")
 	form.Set("scanner_name_0", "opus")
 	form.Set("scanner_provider_0", "anthropic")
 	form.Set("scanner_model_0", "claude-opus-4-7")
@@ -135,7 +134,7 @@ func TestEnsemblePOSTSavesValidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAndorra: %v", err)
 	}
-	if ext.Ensemble == nil || !ext.Ensemble.Enabled || len(ext.Ensemble.Scanners) != 2 {
+	if ext.Ensemble == nil || len(ext.Ensemble.Scanners) != 2 {
 		t.Errorf("ensemble not persisted: %+v", ext.Ensemble)
 	}
 	// Confirm upstream block survived
