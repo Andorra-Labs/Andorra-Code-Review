@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCodeReview Setup</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2129;
+    --border: #30363d;
+    --border-strong: #484f58;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent-strong: #1f6feb;
+    --success: #3fb950;
+    --danger: #f85149;
+    --warning: #d29922;
+    --code-bg: #0b0f14;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+  h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    font-weight: 600;
+  }
+  .tagline {
+    color: var(--text-dim);
+    margin: 0 0 32px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .panel h2 {
+    margin: 0 0 4px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .panel h3 {
+    margin: 20px 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .panel .hint {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin: 0 0 16px;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  input[type="text"], input[type="password"], input[type="url"], select {
+    width: 100%;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 11px;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.2);
+  }
+  input.invalid {
+    border-color: var(--danger);
+  }
+  input.invalid:focus {
+    box-shadow: 0 0 0 3px rgba(248,81,73,0.2);
+  }
+  .validation-msg {
+    color: var(--danger);
+    font-size: 12px;
+    margin-top: 4px;
+    min-height: 18px;
+  }
+  .row { margin-bottom: 12px; }
+  .row:last-child { margin-bottom: 0; }
+  /* Provider card */
+  .provider-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .provider-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .provider-grid-3 {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 640px) {
+    .provider-grid, .provider-grid-3 { grid-template-columns: 1fr; }
+  }
+  .model-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+    margin-bottom: 8px;
+  }
+  .model-chip {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 3px 8px 3px 10px;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .model-chip button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+  }
+  .model-chip button:hover { color: var(--danger); }
+  .icon-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 6px;
+    width: 28px;
+    height: 28px;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn:hover { color: var(--danger); border-color: var(--danger); }
+  .row-actions {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+  }
+  /* Active provider row */
+  .active-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 640px) {
+    .active-row { grid-template-columns: 1fr; }
+  }
+  /* Buttons */
+  button.add-btn {
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--text-dim);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    width: 100%;
+  }
+  button.add-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  button.primary {
+    background: var(--success);
+    color: #0d1117;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary:hover { filter: brightness(1.1); }
+  button.secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.secondary:hover { border-color: var(--accent); }
+  .actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    color: var(--text);
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    overflow-x: auto;
+    margin: 12px 0 0;
+    max-height: 480px;
+  }
+  code.inline {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  .warning {
+    background: rgba(210,153,34,0.1);
+    border: 1px solid rgba(210,153,34,0.4);
+    border-radius: 6px;
+    padding: 12px 14px;
+    color: #e3b341;
+    font-size: 13px;
+    margin-top: 16px;
+  }
+  .empty {
+    color: var(--text-dim);
+    font-size: 13px;
+    font-style: italic;
+    padding: 8px 0;
+  }
+  .path-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 12px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .path-row strong { color: var(--text-dim); font-size: 12px; font-weight: 500; }
+  .footer {
+    margin-top: 32px;
+    color: var(--text-dim);
+    font-size: 12px;
+    text-align: center;
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>OpenCodeReview Setup</h1>
+<p class="tagline">Define LLM providers and pick an active provider/model. Generates a <code class="inline">config.json</code> the <code class="inline">ocr</code> CLI can read.</p>
+
+<div class="panel">
+  <h2>Import existing config <span style="color:var(--text-dim);font-weight:400;font-size:14px">(optional)</span></h2>
+  <p class="hint">Load an existing <code class="inline">config.json</code> to edit and re-export.</p>
+  <div class="actions" style="margin-top:0">
+    <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+    <button class="secondary" id="importBtn" type="button">Choose config.json…</button>
+    <span id="importStatus" style="color:var(--text-dim);font-size:13px"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Providers</h2>
+  <p class="hint">Each provider is an endpoint (URL + protocol + key) and a list of model ids hosted there.</p>
+  <div id="providersList"></div>
+  <button class="add-btn" id="addProvider" type="button">+ Add provider</button>
+  <div class="warning">
+    API keys are saved in plaintext in the downloaded file. For preset providers,
+    leave the key blank and set the provider's documented environment variable.
+    Custom providers require a real key here. For local use,
+    <code class="inline">chmod 600 ~/.opencodereview/config.json</code> after saving.
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Active provider</h2>
+  <p class="hint">Select the provider and model the CLI will use by default.</p>
+  <div class="active-row" id="activeRow">
+    <div>
+      <label>Provider</label>
+      <select id="activeProvider"></select>
+    </div>
+    <div>
+      <label>Model</label>
+      <select id="activeModel"></select>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Preview</h2>
+  <p class="hint">This is the <code class="inline">config.json</code> that will be downloaded. API keys are shown masked here but written in full to the downloaded file.</p>
+  <pre id="preview">{}</pre>
+  <div class="actions">
+    <button class="primary" id="downloadBtn" type="button">Download config.json</button>
+    <button class="secondary" id="copyBtn" type="button">Copy to clipboard</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Where to put it</h2>
+  <div class="path-row">
+    <strong>macOS / Linux</strong>
+    <code class="inline">~/.opencodereview/config.json</code>
+  </div>
+  <div class="path-row">
+    <strong>Windows</strong>
+    <code class="inline">%USERPROFILE%\.opencodereview\config.json</code>
+  </div>
+  <p class="hint" style="margin-top:16px;margin-bottom:8px">Then verify with:</p>
+  <pre>ocr llm test</pre>
+</div>
+
+<div class="footer">
+  Built for the <a href="https://github.com/Andorra-Labs/andorra-code-review">Andorra-Code-Review</a> CLI.
+</div>
+
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+/* ───── state ─────────────────────────────────────────────────────────── */
+
+const state = {
+  providers: [],         // [{ id, name, url, protocol, api_key, auth_header, extra_body, models: [] }]
+  activeProvider: "",
+  activeModel: "",
+};
+
+let nextId = 1;
+const uid = () => `id-${nextId++}`;
+
+// Preset provider names known to the CLI resolver. These must be written to
+// the `providers` section; everything else goes under `custom_providers`.
+const PRESET_NAMES = new Set([
+  "anthropic", "openai", "dashscope", "dashscope-tokenplan", "deepseek",
+  "hy-tokenplan", "kimi", "mimo", "minimax", "tencent-tokenhub",
+  "volcengine", "z-ai",
+]);
+
+// Return the canonical lowercase preset name if `name` matches a preset
+// case-insensitively; otherwise return null.
+function canonicalPresetName(name) {
+  const lower = String(name).toLowerCase();
+  if (PRESET_NAMES.has(lower)) return lower;
+  return null;
+}
+
+function findProvider(name) {
+  return state.providers.find((p) => p.name === name);
+}
+
+function allProviderNames() {
+  return state.providers.map((p) => p.name).filter(Boolean);
+}
+
+function presetProtocol(name) {
+  // The Go resolver defaults anthropic preset to anthropic protocol; openai-style
+  // presets to openai. Without importing the full provider table we mirror the
+  // obvious cases and default to openai for the rest.
+  if (name === "anthropic") return "anthropic";
+  return "openai";
+}
+
+/* ───── rendering helpers ─────────────────────────────────────────────── */
+
+let renderTimer = null;
+function scheduleRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => {
+    renderTimer = null;
+    render();
+  }, 100);
+}
+
+/* ───── providers ─────────────────────────────────────────────────────── */
+
+const PROVIDER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const PROVIDER_NAME_HINT = "Use letters, numbers, hyphens and underscores only.";
+
+function validateProviderName(input, msgEl, selfId) {
+  const v = input.value.trim();
+  if (!v) {
+    msgEl.textContent = "";
+    input.classList.remove("invalid");
+    return true;
+  }
+  if (!PROVIDER_NAME_RE.test(v)) {
+    msgEl.textContent = PROVIDER_NAME_HINT;
+    input.classList.add("invalid");
+    return false;
+  }
+  if (state.providers.some((p) => p.id !== selfId && p.name === v)) {
+    msgEl.textContent = "This alias is already in use.";
+    input.classList.add("invalid");
+    return false;
+  }
+  msgEl.textContent = "";
+  input.classList.remove("invalid");
+  return true;
+}
+
+function validateURL(input, msgEl) {
+  const v = input.value.trim();
+  if (!v) {
+    msgEl.textContent = "";
+    input.classList.remove("invalid");
+    return true;
+  }
+  try {
+    new URL(v);
+    msgEl.textContent = "";
+    input.classList.remove("invalid");
+    return true;
+  } catch (_) {
+    msgEl.textContent = "Please enter a valid URL (e.g. https://api.example.com/v1)";
+    input.classList.add("invalid");
+    return false;
+  }
+}
+
+function addProvider(seed) {
+  const p = Object.assign({
+    id: uid(),
+    name: "",
+    url: "",
+    protocol: "openai",
+    api_key: "",
+    auth_header: "",
+    extra_body: null,
+    models: [],
+  }, seed || {});
+  state.providers.push(p);
+  renderProviders();
+  renderActiveSelects();
+  scheduleRender();
+}
+
+function removeProvider(id) {
+  const removed = state.providers.find((p) => p.id === id);
+  state.providers = state.providers.filter((p) => p.id !== id);
+  if (removed && state.activeProvider === removed.name) {
+    state.activeProvider = "";
+    state.activeModel = "";
+  }
+  renderProviders();
+  renderActiveSelects();
+  scheduleRender();
+}
+
+function renderProviders() {
+  const list = $("providersList");
+  list.innerHTML = "";
+  if (state.providers.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No providers yet. Click “+ Add provider” below to start.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const p of state.providers) list.appendChild(providerCard(p));
+}
+
+function providerCard(p) {
+  const card = document.createElement("div");
+  card.className = "provider-card";
+  card.dataset.id = p.id;
+  card.innerHTML = `
+    <div class="row-actions">
+      <button class="icon-btn" data-act="remove" title="Remove provider" type="button">×</button>
+    </div>
+    <div class="provider-grid-3">
+      <div class="row">
+        <label>Name (alias)</label>
+        <input type="text" data-field="name" placeholder="anthropic-prod, openai-team-a, on-prem">
+        <div class="validation-msg" data-field="name-validation"></div>
+      </div>
+      <div class="row">
+        <label>Protocol</label>
+        <select data-field="protocol">
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>API key (optional)</label>
+        <input type="password" data-field="api_key" placeholder="preset: leave blank for env fallback; custom: enter key">
+      </div>
+    </div>
+    <div class="row">
+      <label>Base URL</label>
+      <input type="url" data-field="url" placeholder="https://api.example.com/v1">
+      <div class="validation-msg" data-field="url-validation"></div>
+    </div>
+    <div class="row">
+      <label>Models</label>
+      <div class="model-list" data-field="models"></div>
+      <input type="text" data-field="model-input" placeholder="Type a model id and press Enter (e.g. claude-sonnet-4-6)">
+    </div>
+  `;
+
+  // Hydrate fields.
+  card.querySelector('[data-field="name"]').value = p.name;
+  card.querySelector('[data-field="protocol"]').value = p.protocol;
+  card.querySelector('[data-field="api_key"]').value = p.api_key;
+  card.querySelector('[data-field="url"]').value = p.url;
+  renderModels(card, p);
+
+  // Wire events.
+  card.querySelector('[data-act="remove"]').addEventListener("click", () => removeProvider(p.id));
+  ["name", "url", "api_key"].forEach((field) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    el.addEventListener("input", () => {
+      const oldName = p.name;
+      p[field] = el.value;
+      if (field === "name") {
+        const newName = el.value;
+        if (state.activeProvider === oldName) {
+          state.activeProvider = newName;
+        }
+        renderActiveSelects();
+      }
+      if (field === "name") validateProviderName(el, card.querySelector('[data-field="name-validation"]'), p.id);
+      if (field === "url") validateURL(el, card.querySelector('[data-field="url-validation"]'));
+      scheduleRender();
+    });
+  });
+  card.querySelector('[data-field="protocol"]').addEventListener("change", (e) => {
+    p.protocol = e.target.value;
+    scheduleRender();
+  });
+  const modelInput = card.querySelector('[data-field="model-input"]');
+  modelInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      const v = modelInput.value.trim();
+      if (v && !p.models.includes(v)) p.models.push(v);
+      modelInput.value = "";
+      renderModels(card, p);
+      renderActiveSelects();
+      scheduleRender();
+    }
+  });
+
+  return card;
+}
+
+function renderModels(card, p) {
+  const list = card.querySelector('[data-field="models"]');
+  list.innerHTML = "";
+  for (const m of p.models) {
+    const chip = document.createElement("span");
+    chip.className = "model-chip";
+    chip.textContent = m;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.title = "Remove model";
+    x.addEventListener("click", () => {
+      p.models = p.models.filter((mm) => mm !== m);
+      if (state.activeProvider === p.name && state.activeModel === m) {
+        state.activeModel = "";
+      }
+      renderModels(card, p);
+      renderActiveSelects();
+      scheduleRender();
+    });
+    chip.appendChild(x);
+    list.appendChild(chip);
+  }
+}
+
+$("addProvider").addEventListener("click", () => addProvider());
+
+/* ───── active provider ───────────────────────────────────────────────── */
+
+function renderActiveSelects() {
+  populateProviderSelect($("activeProvider"), state.activeProvider);
+  populateModelSelect($("activeModel"), state.activeProvider, state.activeModel);
+}
+
+$("activeProvider").addEventListener("change", (e) => {
+  state.activeProvider = e.target.value;
+  state.activeModel = "";
+  renderActiveSelects();
+  scheduleRender();
+});
+$("activeModel").addEventListener("change", (e) => {
+  state.activeModel = e.target.value;
+  scheduleRender();
+});
+
+function populateProviderSelect(sel, current) {
+  sel.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = ""; opt0.textContent = "— pick a provider —";
+  sel.appendChild(opt0);
+  for (const name of allProviderNames()) {
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  sel.value = current || "";
+}
+
+function populateModelSelect(sel, providerName, current) {
+  sel.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = ""; opt0.textContent = providerName ? "— pick a model —" : "— pick a provider first —";
+  sel.appendChild(opt0);
+  const provider = findProvider(providerName);
+  if (provider) {
+    for (const m of provider.models) {
+      const opt = document.createElement("option");
+      opt.value = m; opt.textContent = m;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = current || "";
+}
+
+/* ───── output ────────────────────────────────────────────────────────── */
+
+function buildConfig() {
+  const cfg = { custom_providers: {}, providers: {} };
+  for (const p of state.providers) {
+    if (!p.name) continue;
+    if (!PROVIDER_NAME_RE.test(p.name)) continue;
+    const entry = { protocol: p.protocol };
+    if (p.url) entry.url = p.url;
+    if (p.api_key) entry.api_key = p.api_key;
+    if (p.auth_header) entry.auth_header = p.auth_header;
+    if (p.models.length > 0) entry.models = [...p.models];
+    if (p.extra_body && typeof p.extra_body === "object" && Object.keys(p.extra_body).length > 0) {
+      entry.extra_body = JSON.parse(JSON.stringify(p.extra_body));
+    }
+    const preset = canonicalPresetName(p.name);
+    if (preset) {
+      cfg.providers[preset] = entry;
+    } else {
+      cfg.custom_providers[p.name] = entry;
+    }
+  }
+  if (Object.keys(cfg.providers).length === 0) delete cfg.providers;
+  if (Object.keys(cfg.custom_providers).length === 0) delete cfg.custom_providers;
+  if (state.activeProvider && state.activeModel) {
+    cfg.provider = canonicalPresetName(state.activeProvider) || state.activeProvider;
+    cfg.model = state.activeModel;
+  }
+  return cfg;
+}
+
+function maskConfig(cfg) {
+  // Return a deep copy with api_key values masked for the live preview only.
+  const mask = (obj) => {
+    if (!obj || typeof obj !== "object") return obj;
+    if (Array.isArray(obj)) return obj.map(mask);
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === "api_key" && typeof v === "string" && v.length > 0) {
+        out[k] = v.length <= 8 ? "•".repeat(v.length) : v.slice(0, 2) + "•".repeat(v.length - 4) + v.slice(-2);
+      } else {
+        out[k] = mask(v);
+      }
+    }
+    return out;
+  };
+  return mask(cfg);
+}
+
+function isConfigValid() {
+  // Provider names must be valid and unique; non-empty URLs must parse.
+  const seen = new Set();
+  for (const p of state.providers) {
+    if (!p.name || !PROVIDER_NAME_RE.test(p.name)) return false;
+    if (seen.has(p.name)) return false;
+    seen.add(p.name);
+    if (p.url) {
+      try {
+        new URL(p.url);
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function render() {
+  $("preview").textContent = JSON.stringify(maskConfig(buildConfig()), null, 2);
+}
+
+/* ───── import ────────────────────────────────────────────────────────── */
+
+function importConfig(cfg) {
+  if (!cfg || typeof cfg !== "object") throw new Error("not an object");
+
+  // Reset state.
+  state.providers = [];
+  state.activeProvider = "";
+  state.activeModel = "";
+
+  const cp = (cfg.custom_providers && typeof cfg.custom_providers === "object") ? cfg.custom_providers : {};
+  const providers = (cfg.providers && typeof cfg.providers === "object") ? cfg.providers : {};
+  // Preset `providers` take precedence over `custom_providers` when the same
+  // alias appears in both sections.
+  const merge = Object.assign({}, cp, providers);
+
+  for (const [name, raw] of Object.entries(merge)) {
+    if (!raw || typeof raw !== "object") continue;
+    let protocol = raw.protocol;
+    if (!protocol) {
+      protocol = PRESET_NAMES.has(name) ? presetProtocol(name) : "openai";
+    } else {
+      protocol = protocol === "anthropic" ? "anthropic" : "openai";
+    }
+    const models = [];
+    if (Array.isArray(raw.models)) models.push(...raw.models);
+    if (raw.model && !models.includes(raw.model)) models.push(raw.model);
+    state.providers.push({
+      id: uid(),
+      name,
+      url: raw.url || "",
+      protocol,
+      api_key: raw.api_key || "",
+      auth_header: raw.auth_header || "",
+      extra_body: raw.extra_body || null,
+      models,
+    });
+  }
+
+  // Determine the active provider/model.
+  let activeProvider = cfg.provider || "";
+  let activeModel = cfg.model || "";
+  if (!activeProvider && cfg.workers && cfg.workers.arbiter) {
+    activeProvider = cfg.workers.arbiter.provider || "";
+    activeModel = cfg.workers.arbiter.model || "";
+  }
+  if (activeProvider) {
+    const matched = state.providers.find((p) => p.name === activeProvider);
+    if (matched && activeModel && !matched.models.includes(activeModel)) {
+      matched.models.unshift(activeModel);
+    }
+    // Also honor provider-entry model when no top-level model was set.
+    if (matched && !activeModel) {
+      const entryModel = (cfg.providers && cfg.providers[activeProvider] && cfg.providers[activeProvider].model) ||
+                         (cfg.custom_providers && cfg.custom_providers[activeProvider] && cfg.custom_providers[activeProvider].model);
+      if (entryModel && !matched.models.includes(entryModel)) {
+        matched.models.unshift(entryModel);
+      }
+      activeModel = entryModel || "";
+    }
+    state.activeProvider = activeProvider;
+    state.activeModel = activeModel;
+  }
+
+  // Preserve a legacy top-level `llm` block as a provider so a working
+  // manual config can still be edited and re-exported.
+  if (cfg.llm && typeof cfg.llm === "object" && cfg.llm.url) {
+    const legacy = cfg.llm;
+    const legacyName = "legacy-llm";
+    if (!state.providers.some((p) => p.name === legacyName)) {
+      const models = [];
+      if (legacy.model) models.push(legacy.model);
+      state.providers.push({
+        id: uid(),
+        name: legacyName,
+        url: legacy.url || "",
+        protocol: legacy.use_anthropic === false ? "openai" : "anthropic",
+        api_key: legacy.auth_token || "",
+        auth_header: legacy.auth_header || "",
+        extra_body: legacy.extra_body || null,
+        models,
+      });
+    }
+  }
+
+  renderProviders();
+  renderActiveSelects();
+  render();
+}
+
+$("importBtn").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const status = $("importStatus");
+  const MAX_SIZE = 1 * 1024 * 1024; // 1 MB
+  if (file.size > MAX_SIZE) {
+    status.style.color = "var(--danger)";
+    status.textContent = `Could not load ${file.name}: file exceeds 1 MB limit.`;
+    e.target.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const cfg = JSON.parse(reader.result);
+      importConfig(cfg);
+      status.style.color = "var(--success)";
+      status.textContent = `Loaded ${file.name}`;
+    } catch (err) {
+      status.style.color = "var(--danger)";
+      status.textContent = `Could not load ${file.name}: ${err.message}`;
+    }
+  };
+  reader.onerror = () => {
+    status.style.color = "var(--danger)";
+    status.textContent = `Could not read ${file.name}`;
+  };
+  reader.readAsText(file);
+  e.target.value = "";
+});
+
+/* ───── download / copy ───────────────────────────────────────────────── */
+
+$("downloadBtn").addEventListener("click", () => {
+  if (!isConfigValid()) {
+    alert("Please fix invalid provider names or URLs before downloading.");
+    return;
+  }
+  const blob = new Blob([JSON.stringify(buildConfig(), null, 2) + "\n"], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "config.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+$("copyBtn").addEventListener("click", async () => {
+  if (!isConfigValid()) {
+    alert("Please fix invalid provider names or URLs before copying.");
+    return;
+  }
+  const btn = $("copyBtn");
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(buildConfig(), null, 2));
+    btn.textContent = "Copied";
+  } catch (_) {
+    btn.textContent = "Failed";
+  }
+  setTimeout(() => (btn.textContent = original), 1500);
+});
+
+/* ───── initial render ────────────────────────────────────────────────── */
+
+renderProviders();
+renderActiveSelects();
+render();
+</script>
+</body>
+</html>
