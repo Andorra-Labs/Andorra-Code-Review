@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCodeReview Setup</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent-strong: #1f6feb;
+    --success: #3fb950;
+    --warning: #d29922;
+    --code-bg: #0b0f14;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+  h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    font-weight: 600;
+  }
+  .tagline {
+    color: var(--text-dim);
+    margin: 0 0 32px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .panel h2 {
+    margin: 0 0 4px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .panel .hint {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin: 0 0 16px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  input[type="text"], input[type="password"], select {
+    width: 100%;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    padding: 9px 12px;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.2);
+  }
+  .row { margin-bottom: 14px; }
+  .row:last-child { margin-bottom: 0; }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 600px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+  .toggle-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .toggle-row button {
+    flex: 1;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 6px;
+    padding: 9px 12px;
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .toggle-row button.active {
+    background: var(--accent-strong);
+    border-color: var(--accent);
+    color: white;
+  }
+  .actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-top: 16px;
+  }
+  button.primary {
+    background: var(--success);
+    color: #0d1117;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary:hover { filter: brightness(1.1); }
+  button.secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.secondary:hover { border-color: var(--accent); }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    color: var(--text);
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px;
+    overflow-x: auto;
+    margin: 12px 0 0;
+  }
+  code.inline {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  .path-row {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: 12px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .path-row strong { color: var(--text-dim); font-size: 13px; font-weight: 500; }
+  .warning {
+    background: rgba(210,153,34,0.1);
+    border: 1px solid rgba(210,153,34,0.4);
+    border-radius: 6px;
+    padding: 12px 14px;
+    color: #e3b341;
+    font-size: 13px;
+    margin-top: 16px;
+  }
+  .footer {
+    margin-top: 32px;
+    color: var(--text-dim);
+    font-size: 12px;
+    text-align: center;
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>OpenCodeReview Setup</h1>
+<p class="tagline">Generate a <code class="inline">config.json</code> for the <code class="inline">ocr</code> CLI without typing config-set commands.</p>
+
+<div class="panel">
+  <h2>Provider</h2>
+  <p class="hint">Pick a built-in provider or supply a custom OpenAI/Anthropic-compatible endpoint.</p>
+
+  <div class="toggle-row">
+    <button id="modeBuiltin" class="active" type="button">Built-in</button>
+    <button id="modeCustom" type="button">Custom endpoint</button>
+  </div>
+
+  <div id="builtinFields">
+    <div class="grid-2">
+      <div class="row">
+        <label for="builtinProvider">Provider</label>
+        <select id="builtinProvider">
+          <option value="anthropic">anthropic — api.anthropic.com</option>
+          <option value="openai">openai — api.openai.com</option>
+          <option value="deepseek">deepseek — api.deepseek.com</option>
+          <option value="kimi">kimi — api.moonshot.cn</option>
+          <option value="minimax">minimax — api.minimaxi.com</option>
+          <option value="mimo">mimo — api.xiaomimimo.com</option>
+          <option value="dashscope">dashscope — dashscope.aliyuncs.com</option>
+          <option value="dashscope-tokenplan">dashscope-tokenplan</option>
+          <option value="hy-tokenplan">hy-tokenplan — lkeap.cloud.tencent.com</option>
+          <option value="tencent-tokenhub">tencent-tokenhub</option>
+          <option value="volcengine">volcengine — ark.cn-beijing.volces.com</option>
+          <option value="z-ai">z-ai — open.bigmodel.cn</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="builtinModel">Model</label>
+        <input type="text" id="builtinModel" placeholder="e.g. claude-sonnet-4-6, gpt-4o, deepseek-chat">
+      </div>
+    </div>
+    <div class="row">
+      <label for="builtinApiKey">API key</label>
+      <input type="password" id="builtinApiKey" placeholder="sk-... (stored in plaintext in config.json)">
+    </div>
+  </div>
+
+  <div id="customFields" style="display:none">
+    <div class="grid-2">
+      <div class="row">
+        <label for="customName">Provider name (alias)</label>
+        <input type="text" id="customName" placeholder="my-gateway">
+      </div>
+      <div class="row">
+        <label for="customProtocol">Protocol</label>
+        <select id="customProtocol">
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <label for="customUrl">Base URL</label>
+      <input type="text" id="customUrl" placeholder="https://gateway.internal.com/v1">
+    </div>
+    <div class="grid-2">
+      <div class="row">
+        <label for="customModel">Model</label>
+        <input type="text" id="customModel" placeholder="llama-3-70b">
+      </div>
+      <div class="row">
+        <label for="customApiKey">API key</label>
+        <input type="password" id="customApiKey" placeholder="optional for internal endpoints">
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Preview</h2>
+  <p class="hint">This is the <code class="inline">config.json</code> that will be downloaded.</p>
+  <pre id="preview">{}</pre>
+  <div class="actions">
+    <button class="primary" id="downloadBtn" type="button">Download config.json</button>
+    <button class="secondary" id="copyBtn" type="button">Copy to clipboard</button>
+  </div>
+  <div class="warning">
+    The downloaded file contains your API key in plaintext. Move it to the path below and restrict permissions (<code class="inline">chmod 600 ~/.opencodereview/config.json</code> on macOS/Linux).
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Where to put it</h2>
+  <p class="hint">Save the downloaded file as <code class="inline">config.json</code> at:</p>
+  <div class="path-row">
+    <strong>macOS / Linux</strong>
+    <code class="inline">~/.opencodereview/config.json</code>
+  </div>
+  <div class="path-row">
+    <strong>Windows</strong>
+    <code class="inline">%USERPROFILE%\.opencodereview\config.json</code>
+  </div>
+  <p class="hint" style="margin-top:16px;margin-bottom:8px">Then verify with:</p>
+  <pre>ocr llm test</pre>
+</div>
+
+<div class="footer">
+  Built for the <a href="https://github.com/Andorra-Labs/Andorra-Code-Review">Andorra-Code-Review</a> CLI.
+</div>
+
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+let mode = "builtin";
+
+$("modeBuiltin").addEventListener("click", () => setMode("builtin"));
+$("modeCustom").addEventListener("click", () => setMode("custom"));
+
+function setMode(next) {
+  mode = next;
+  $("modeBuiltin").classList.toggle("active", next === "builtin");
+  $("modeCustom").classList.toggle("active", next === "custom");
+  $("builtinFields").style.display = next === "builtin" ? "" : "none";
+  $("customFields").style.display = next === "custom" ? "" : "none";
+  render();
+}
+
+// Suggest a sensible default model whenever the built-in provider changes.
+const DEFAULT_MODELS = {
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-4o",
+  deepseek: "deepseek-chat",
+  kimi: "moonshot-v1-32k",
+  minimax: "MiniMax-Text-01",
+  mimo: "mimo-7b-rl",
+  dashscope: "qwen3-max",
+  "dashscope-tokenplan": "qwen3-max",
+  "hy-tokenplan": "hunyuan-large",
+  "tencent-tokenhub": "hunyuan-large",
+  volcengine: "doubao-pro-32k",
+  "z-ai": "glm-4-plus",
+};
+
+$("builtinProvider").addEventListener("change", () => {
+  const def = DEFAULT_MODELS[$("builtinProvider").value];
+  if (def && !$("builtinModel").dataset.touched) {
+    $("builtinModel").value = def;
+  }
+  render();
+});
+$("builtinModel").addEventListener("input", () => {
+  $("builtinModel").dataset.touched = "1";
+  render();
+});
+["builtinApiKey", "customName", "customProtocol", "customUrl", "customModel", "customApiKey"]
+  .forEach((id) => $(id).addEventListener("input", render));
+
+// Seed the default model on first load.
+$("builtinModel").value = DEFAULT_MODELS[$("builtinProvider").value];
+
+function buildConfig() {
+  const cfg = { providers: {}, llm: {} };
+
+  if (mode === "builtin") {
+    const provider = $("builtinProvider").value;
+    const model = $("builtinModel").value.trim();
+    const apiKey = $("builtinApiKey").value;
+    cfg.provider = provider;
+    cfg.providers[provider] = {};
+    if (apiKey) cfg.providers[provider].api_key = apiKey;
+    if (model) cfg.providers[provider].model = model;
+  } else {
+    const name = ($("customName").value.trim() || "custom");
+    const protocol = $("customProtocol").value;
+    const url = $("customUrl").value.trim();
+    const model = $("customModel").value.trim();
+    const apiKey = $("customApiKey").value;
+    cfg.provider = name;
+    cfg.custom_providers = {};
+    cfg.custom_providers[name] = { protocol };
+    if (url) cfg.custom_providers[name].url = url;
+    if (model) cfg.custom_providers[name].model = model;
+    if (apiKey) cfg.custom_providers[name].api_key = apiKey;
+  }
+
+  return cfg;
+}
+
+function render() {
+  $("preview").textContent = JSON.stringify(buildConfig(), null, 2);
+}
+render();
+
+$("downloadBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(buildConfig(), null, 2) + "\n"], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "config.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+$("copyBtn").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(buildConfig(), null, 2));
+    const btn = $("copyBtn");
+    const original = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => (btn.textContent = original), 1500);
+  } catch (_) {
+    /* clipboard API may be blocked on file:// — fall back to manual select */
+  }
+});
+</script>
+</body>
+</html>
