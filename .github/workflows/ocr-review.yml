@@ -1,5 +1,10 @@
 # OpenCodeReview - GitHub Actions PR Auto-Review
 #
+# The OCR binary is built from this repo's source (cmd/opencodereview) on
+# every run so the workflow exercises the in-tree code rather than Alibaba's
+# published @alibaba-group/open-code-review npm package. This is what lets
+# us live-test review changes via the PR that introduces them.
+#
 # Triggers:
 #   - PR opened, synchronized, reopened, or marked ready_for_review
 #   - Comment on PR containing '/open-code-review', '@open-code-review' or '@ocr'
@@ -95,14 +100,6 @@ jobs:
               core.info(`Skipping reaction: ${e.message}`);
             }
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22.16.0
-
-      - name: Install OpenCodeReview
-        run: npm install -g --registry https://registry.npmjs.org @alibaba-group/open-code-review
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -137,6 +134,23 @@ jobs:
             BASE_REF="${{ steps.pr-context.outputs.base_ref }}"
           fi
           git fetch origin "${BASE_REF}:${BASE_REF}" || git fetch origin "${BASE_REF}"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build OCR from source
+        # Build this repo's OCR binary so the workflow exercises the code on
+        # the PR, not Alibaba's published @alibaba-group/open-code-review npm
+        # release. Using the in-tree build is what makes live testing of the
+        # review tool possible from CI.
+        shell: bash
+        run: |
+          make build
+          sudo install -m 0755 dist/opencodereview /usr/local/bin/ocr
+          ocr --version || ocr -v || true
 
       - name: Resolve LLM provider
         id: llm-provider
