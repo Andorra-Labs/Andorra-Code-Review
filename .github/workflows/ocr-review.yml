@@ -52,7 +52,11 @@ permissions:
 
 jobs:
   code-review:
-    runs-on: ubuntu-slim
+    # ubuntu-slim is the cheapest 1-core runner; sufficient for git fetch,
+    # the Go build, and a single LLM round-trip. Spark needs the Tailscale
+    # action, which requires apt/sudo/daemon control that the slim image
+    # doesn't provide — fall back to ubuntu-latest only in that case.
+    runs-on: ${{ vars.LLM_PROVIDER == 'spark' && 'ubuntu-latest' || 'ubuntu-slim' }}
     if: |
       github.event_name == 'pull_request' ||
       (
