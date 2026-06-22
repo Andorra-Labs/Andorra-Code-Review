@@ -26,6 +26,8 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Download build artifact
+        id: download
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: ocr-build
@@ -33,7 +35,18 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: artifact
 
+      - name: Check artifact present
+        id: have
+        run: |
+          if [ -d artifact ] && [ -f artifact/ocr ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No ocr-build artifact — build was skipped (likely no .ocr/config.json committed). Nothing to do."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Read PR metadata
+        if: steps.have.outputs.present == 'true'
         id: meta
         run: |
           chmod +x artifact/ocr
@@ -43,12 +56,14 @@ jobs:
           echo "base_sha=$(cat artifact/base_sha)"    >> "$GITHUB_OUTPUT"
 
       - name: Check out base ref (trusted code only)
+        if: steps.have.outputs.present == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
           fetch-depth: 0
 
       - name: Fetch PR head commit (as a ref, not a checkout)
+        if: steps.have.outputs.present == 'true'
         run: |
           # We need the PR head commit to be reachable so `git diff` works,
           # but we deliberately do NOT check it out. Working tree stays at
@@ -56,6 +71,7 @@ jobs:
           git fetch origin "${{ steps.meta.outputs.head_sha }}"
 
       - name: Run ensemble review
+        if: steps.have.outputs.present == 'true'
         env:
           # Names match what `ocr config export --placeholder-secrets` wrote
           # into .ocr/config.json. Edit as needed for your providers.
@@ -73,7 +89,7 @@ jobs:
             > review.json
 
       - name: Post review comments
-        if: always() && hashFiles('review.json') != ''
+        if: steps.have.outputs.present == 'true' && hashFiles('review.json') != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
