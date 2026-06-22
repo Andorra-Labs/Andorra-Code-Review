@@ -1,47 +1,51 @@
-# Andorra OCR ensemble review — build phase.
+# Andorra OCR ensemble review on pull requests.
 #
-# SECURITY: this workflow uses `pull_request` (not `pull_request_target`), so
-# it runs in the FORK context with no access to repository secrets. It builds
-# the OCR binary from the PR head and uploads it as an artifact for the
-# companion `andorra-ocr-review-post.yml` workflow to consume. Because this
-# job has no secrets and no write tokens, malicious fork PRs cannot exfiltrate
-# anything by tampering with the checked-out code.
+# === SECURITY MODEL ===
+# This workflow is `pull_request_target`-triggered so it has secret access
+# even on fork PRs. The safety story:
 #
-# The actual review (which needs secrets to call LLM APIs) and the comment
-# posting (which needs the PR-write token) happen in the companion workflow,
-# triggered by workflow_run when this job finishes. That workflow never
-# executes PR head code — it only consumes the artifact this job produced.
+#   1. The OCR binary is `go install`-ed from a PINNED UPSTREAM VERSION.
+#      It is never built from PR source. Update the version below when you
+#      want to adopt a new release.
+#   2. The config file (.ocr/config.json) is read from the BASE ref. Fork
+#      PRs cannot redirect API calls or change scanner config by editing
+#      that file in their branch.
+#   3. PR head code is checked out into pr-head/ as SANDBOXED DATA. The
+#      OCR binary reads those files as text (it's a static review tool —
+#      it never executes the code under review). Secrets are passed only
+#      to the trusted OCR binary, not to anything sourced from PR head.
 #
-# See:
-#   https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+# This is the standard mitigation for the pull_request_target pwn-request
+# antipattern: https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
 #
-# Setup:
-#   1. Locally:   ocr config ui  (configure scanners + arbiter)
-#   2. Locally:   ocr config export
+# === SETUP ===
+#   1. Locally:   ocr config ui     (configure scanners + arbiter)
+#   2. Locally:   ocr config export (writes .ocr/config.json with placeholders)
 #   3. Commit:    git add .ocr/config.json && git commit
 #   4. In CI:     add OCR_ANTHROPIC_API_KEY / OCR_OPENAI_API_KEY /
-#                 OCR_BEDROCK_API_KEY / OCR_BEDROCK_REGION as repo or org
-#                 secrets, matching the ${env:NAME} placeholders in
-#                 your .ocr/config.json.
-name: Andorra OCR Review (build)
+#                 OCR_BEDROCK_API_KEY / OCR_BEDROCK_REGION (whichever your
+#                 .ocr/config.json placeholders reference) as repo or org
+#                 secrets.
+name: Andorra OCR Review
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
+  pull-requests: write
+  actions: read
 
 jobs:
-  build:
-    name: Build OCR + collect diff
+  review:
     runs-on: ubuntu-latest
     if: ${{ !github.event.pull_request.draft }}
     steps:
-      - name: Check out PR head (no secrets in this job)
+      - name: Check out BASE ref (trusted — controls .ocr/config.json)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
 
       - name: Detect committed config
@@ -50,13 +54,17 @@ jobs:
           if [ -f .ocr/config.json ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::.ocr/config.json not present — skipping Andorra OCR review. Run 'ocr config export' locally and commit the result to enable."
+            echo "::notice::.ocr/config.json not present in base ref — skipping Andorra OCR review."
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Fetch base ref
+      - name: Check out PR head into pr-head/ as data (never executed)
         if: steps.detect.outputs.present == 'true'
-        run: git fetch origin ${{ github.event.pull_request.base.ref }} --depth=50
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: pr-head
 
       - name: Set up Go
         if: steps.detect.outputs.present == 'true'
@@ -64,25 +72,85 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Build OCR
+      - name: Install OCR from a pinned upstream version
         if: steps.detect.outputs.present == 'true'
-        run: go build -o ocr ./cmd/opencodereview
-
-      - name: Stage artifact
-        if: steps.detect.outputs.present == 'true'
+        env:
+          # SECURITY: This must point at a tag/commit YOU trust. Never use
+          # @HEAD, a branch, or a ref the PR author can influence.
+          OCR_VERSION: v1.0.0
         run: |
-          mkdir -p artifact
-          cp ocr artifact/
-          cp .ocr/config.json artifact/config.json
-          echo '${{ github.event.pull_request.number }}' > artifact/pr_number
-          echo '${{ github.event.pull_request.base.ref }}' > artifact/base_ref
-          echo '${{ github.event.pull_request.head.sha }}' > artifact/head_sha
-          git rev-parse origin/${{ github.event.pull_request.base.ref }} > artifact/base_sha
+          go install "github.com/open-code-review/open-code-review/cmd/opencodereview@${OCR_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Upload artifact
+      - name: Fetch base ref inside pr-head sandbox
         if: steps.detect.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        working-directory: pr-head
+        run: git fetch origin ${{ github.event.pull_request.base.ref }} --depth=50
+
+      - name: Run ensemble review (trusted binary + base config + sandboxed PR data)
+        if: steps.detect.outputs.present == 'true'
+        working-directory: pr-head
+        env:
+          # Names match what `ocr config export --placeholder-secrets` wrote
+          # into .ocr/config.json. Edit for your providers.
+          OCR_ANTHROPIC_API_KEY: ${{ secrets.OCR_ANTHROPIC_API_KEY }}
+          OCR_OPENAI_API_KEY:    ${{ secrets.OCR_OPENAI_API_KEY }}
+          OCR_BEDROCK_API_KEY:   ${{ secrets.OCR_BEDROCK_API_KEY }}
+          OCR_BEDROCK_REGION:    ${{ secrets.OCR_BEDROCK_REGION }}
+        run: |
+          opencodereview review \
+            --ensemble \
+            --config ../.ocr/config.json \
+            --from origin/${{ github.event.pull_request.base.ref }} \
+            --to ${{ github.event.pull_request.head.sha }} \
+            --format json \
+            > ../review.json
+
+      - name: Post review comments
+        if: steps.detect.outputs.present == 'true' && hashFiles('review.json') != ''
+        uses: actions/github-script@v7
         with:
-          name: ocr-build
-          path: artifact/
-          retention-days: 1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('review.json', 'utf8'));
+            const comments = (data.comments || []).map(c => ({
+              path: c.path,
+              line: c.end_line || c.start_line,
+              side: 'RIGHT',
+              body: c.content + (c.suggestion_code
+                ? '\n\n```suggestion\n' + c.suggestion_code + '\n```'
+                : '')
+            }));
+            const summary = data.ensemble
+              ? `**Andorra OCR ensemble:** ${data.ensemble.scanners.length} scanners, ${data.ensemble.groups.length} groups → ${comments.length} accepted bug(s).`
+              : `**Andorra OCR:** ${comments.length} comment(s).`;
+            if (comments.length === 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary + '\n\n_No accepted-bug findings on this diff._'
+              });
+              return;
+            }
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                commit_id: '${{ github.event.pull_request.head.sha }}',
+                event: 'COMMENT',
+                body: summary,
+                comments
+              });
+            } catch (err) {
+              core.warning(`createReview failed: ${err.message}. Falling back to issue comment.`);
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary + '\n\n' + comments.map(c =>
+                  `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n')
+              });
+            }

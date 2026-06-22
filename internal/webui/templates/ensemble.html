@@ -29,7 +29,7 @@
           {{range $i, $s := .Scanners}}
           <tr>
             <td><input name="scanner_name_{{$i}}" value="{{$s.Name}}" required></td>
-            <td><input name="scanner_provider_{{$i}}" value="{{$s.Provider}}" required></td>
+            <td><input name="scanner_provider_{{$i}}" value="{{$s.Provider}}" placeholder="(blank if Bedrock)"></td>
             <td><input name="scanner_model_{{$i}}" value="{{$s.Model}}"></td>
             <td><input type="checkbox" name="scanner_bedrock_{{$i}}" value="true" {{if $s.Bedrock}}checked{{end}}></td>
             <td><input type="checkbox" name="scanner_local_{{$i}}" value="true" {{if $s.Local}}checked{{end}}></td>

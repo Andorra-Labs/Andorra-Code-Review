@@ -61,6 +61,19 @@ func pickVerdictFilter(eopts ensembleOptions, out *configstore.EnsembleOutput) m
 	return set
 }
 
+// filterIncludesNonAccepted reports whether the active verdict filter contains
+// anything other than accepted_bug. When true, the renderer turns on
+// ShowVerdict so users can tell rejected/uncertain/style-only findings apart
+// from real bugs in the output.
+func filterIncludesNonAccepted(filter map[finding.Verdict]struct{}) bool {
+	for v := range filter {
+		if v != finding.VerdictAccepted {
+			return true
+		}
+	}
+	return false
+}
+
 // renderFindings filters by verdict and flattens to upstream LlmComment form.
 func renderFindings(finals []finding.FinalFinding, allowed map[finding.Verdict]struct{}, opts finding.RenderOptions) []model.LlmComment {
 	out := make([]model.LlmComment, 0, len(finals))

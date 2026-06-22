@@ -106,6 +106,37 @@ func parseFlag(arg string) (key, val string, hasVal bool) {
 	return arg, "", false
 }
 
+// buildClient constructs the right LLMClient for a resolved endpoint. Bedrock
+// scanners and the Bedrock arbiter use the dedicated BedrockClient (which
+// speaks Bedrock's Anthropic InvokeModel envelope); everything else goes
+// through the standard Anthropic / OpenAI factory.
+func buildClient(ep llm.ResolvedEndpoint, bedrock bool) llm.LLMClient {
+	if bedrock {
+		return llm.NewBedrockClient(llm.ClientConfig{
+			URL:     ep.URL,
+			APIKey:  ep.Token,
+			Model:   ep.Model,
+			Timeout: 0, // BedrockClient applies its own default
+		})
+	}
+	return llm.NewLLMClient(ep)
+}
+
+// extractRepoFlag scans args for --repo / --repo=value so callers running
+// before parseReviewFlags can still locate the review target's .ocr/config.json.
+// Returns "" when the flag isn't present (caller falls back to cwd).
+func extractRepoFlag(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--repo" && i+1 < len(args):
+			return args[i+1]
+		case strings.HasPrefix(args[i], "--repo="):
+			return strings.TrimPrefix(args[i], "--repo=")
+		}
+	}
+	return ""
+}
+
 func parseCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -132,7 +163,10 @@ func shouldRunEnsemble(args []string) bool {
 	if eopts.forceEnsemble {
 		return true
 	}
-	path, err := resolveAndorraConfigPath(eopts.configPath)
+	// shouldRunEnsemble runs before flag parsing, so we don't yet know
+	// --repo. Best-effort: also probe the --repo target if explicitly given.
+	repoDir := extractRepoFlag(args)
+	path, err := resolveAndorraConfigPath(eopts.configPath, repoDir)
 	if err != nil {
 		return false
 	}
@@ -144,15 +178,22 @@ func shouldRunEnsemble(args []string) bool {
 }
 
 // resolveAndorraConfigPath implements the fork's config lookup order:
-//   explicit --config flag → $PWD/.ocr/config.json → ~/.opencodereview/config.json
+//   explicit --config flag → <repoDir>/.ocr/config.json → ~/.opencodereview/config.json
 // Repo-local beats user-level so CI deterministically uses the committed file.
-func resolveAndorraConfigPath(explicit string) (string, error) {
+// repoDir is the resolved review target (may differ from the process cwd when
+// the user passes --repo); pass "" to fall back to cwd for the quick
+// pre-flight detection.
+func resolveAndorraConfigPath(explicit, repoDir string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	repoLocal := ".ocr/config.json"
-	if cwd, err := os.Getwd(); err == nil {
+	var repoLocal string
+	if repoDir != "" {
+		repoLocal = filepath.Join(repoDir, ".ocr", "config.json")
+	} else if cwd, err := os.Getwd(); err == nil {
 		repoLocal = filepath.Join(cwd, ".ocr", "config.json")
+	} else {
+		repoLocal = filepath.Join(".ocr", "config.json")
 	}
 	if _, err := os.Stat(repoLocal); err == nil {
 		return repoLocal, nil
@@ -219,7 +260,7 @@ func runAndorraReview(args []string) error {
 	planToolDefs := agent.BuildToolDefs(toolEntries, true)
 	mainToolDefs := agent.BuildToolDefs(toolEntries, false)
 
-	cfgPath, err := resolveAndorraConfigPath(eopts.configPath)
+	cfgPath, err := resolveAndorraConfigPath(eopts.configPath, repoDir)
 	if err != nil {
 		return err
 	}
@@ -239,6 +280,9 @@ func runAndorraReview(args []string) error {
 	}
 	if ext == nil || ext.Ensemble == nil {
 		return fmt.Errorf("ensemble mode requested but no ensemble config present in %s", cfgPath)
+	}
+	if ext.Ensemble.Arbiter == nil {
+		return fmt.Errorf("ensemble mode requested but ensemble.arbiter is not configured in %s", cfgPath)
 	}
 	if errs := configstore.Validate(ext); len(errs) > 0 {
 		return fmt.Errorf("ensemble config invalid: %v", errs)
@@ -290,7 +334,7 @@ func runAndorraReview(args []string) error {
 	}
 
 	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, error) {
-		client := llm.NewLLMClient(sep.Endpoint)
+		client := buildClient(sep.Endpoint, sep.Spec.Bedrock)
 		collector := tool.NewCommentCollector()
 		fr := &tool.FileReader{
 			RepoDir: repoDir,
@@ -395,7 +439,7 @@ func runAndorraReview(args []string) error {
 		telemetry.AnyToAttr("arbiter.mode", arbiterCfg.Mode),
 		telemetry.AnyToAttr("group.count", len(groups)),
 	)
-	arbiterClient := llm.NewLLMClient(arbiterEp)
+	arbiterClient := buildClient(arbiterEp, ext.Ensemble.Arbiter.Bedrock)
 	finals, arbiterUsage := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
 	verdictCounts := map[finding.Verdict]int{}
 	for _, f := range finals {
@@ -413,6 +457,12 @@ func runAndorraReview(args []string) error {
 		renderOpts.ShowProvenance = true
 	}
 	verdictFilter := pickVerdictFilter(eopts, ext.Ensemble.Output)
+	// Label verdicts on every rendered finding when the filter includes any
+	// non-accepted verdict, otherwise rejected/uncertain/style-only findings
+	// look indistinguishable from real bugs in the output.
+	if filterIncludesNonAccepted(verdictFilter) {
+		renderOpts.ShowVerdict = true
+	}
 	comments := renderFindings(finals, verdictFilter, renderOpts)
 
 	if opts.audience == "agent" && opts.outputFormat != "json" && unsilence != nil {

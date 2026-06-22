@@ -17,7 +17,7 @@
     const row = document.createElement('tr');
     row.innerHTML =
       '<td><input name="scanner_name_' + i + '" required></td>' +
-      '<td><input name="scanner_provider_' + i + '" required></td>' +
+      '<td><input name="scanner_provider_' + i + '" placeholder="(blank if Bedrock)"></td>' +
       '<td><input name="scanner_model_' + i + '"></td>' +
       '<td><input type="checkbox" name="scanner_bedrock_' + i + '" value="true"></td>' +
       '<td><input type="checkbox" name="scanner_local_' + i + '" value="true"></td>' +
