@@ -103,7 +103,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || (github.event_name == 'issue_comment' && steps.pr-context.outputs.head_sha) || github.sha }}
+          # For issue_comment events the head SHA lives in the contributor's
+          # fork, which is not fetched by default. `refs/pull/N/head` is
+          # exposed on the base repo and resolves to that fork commit, so it
+          # is the portable way to check out the PR head from forks.
+          ref: ${{ github.event.pull_request.head.sha || (github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number)) || github.sha }}
 
       - name: Validate checkout ref
         if: github.event_name == 'issue_comment'
@@ -201,6 +205,7 @@ jobs:
         run: ocr llm test
 
       - name: Run OpenCodeReview
+        id: ocr-run
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -211,6 +216,10 @@ jobs:
             HEAD_SHA="${{ steps.pr-context.outputs.head_sha }}"
           fi
           echo "Reviewing ${HEAD_SHA} against origin/${BASE_REF}"
+          # Capture exit status without failing the step so the post step can
+          # surface OCR errors (stderr, exit code) on the PR. Reviewers should
+          # not have to open Actions logs to learn why coverage is missing.
+          set +e
           ocr review \
             --from "origin/${BASE_REF}" \
             --to "${HEAD_SHA}" \
@@ -218,54 +227,63 @@ jobs:
             --audience agent \
             --concurrency 4 \
             > /tmp/ocr-result.json 2>/tmp/ocr-stderr.log
-
-          if [ ! -s /tmp/ocr-result.json ]; then
-            echo "ERROR: OCR produced no output or failed"
-            cat /tmp/ocr-stderr.log
-            exit 1
-          fi
+          OCR_EXIT=$?
+          set -e
+          echo "ocr_exit_code=${OCR_EXIT}" >> "$GITHUB_OUTPUT"
+          echo "OCR exit code: ${OCR_EXIT}"
 
           cat /tmp/ocr-stderr.log || true
-          cat /tmp/ocr-result.json
+          cat /tmp/ocr-result.json || true
 
       - name: Post OCR review to PR
+        if: always() && steps.ocr-run.outcome != 'skipped'
+        env:
+          OCR_EXIT_CODE: ${{ steps.ocr-run.outputs.ocr_exit_code }}
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const prNumber = context.payload.pull_request?.number || context.issue.number;
             const commitSha = context.payload.pull_request?.head?.sha || '${{ steps.pr-context.outputs.head_sha }}';
+            const ocrExitCode = process.env.OCR_EXIT_CODE || '';
+            const stderr = fs.existsSync('/tmp/ocr-stderr.log') ? fs.readFileSync('/tmp/ocr-stderr.log', 'utf8') : '';
+
+            function failureHeader(reason) {
+              let header = `OpenCodeReview ${reason}.`;
+              if (ocrExitCode && ocrExitCode !== '0') header += ` (exit code: ${ocrExitCode})`;
+              return header;
+            }
 
             let parsed = {};
             try {
-              const raw = fs.readFileSync('/tmp/ocr-result.json', 'utf8').trim();
+              const raw = fs.existsSync('/tmp/ocr-result.json')
+                ? fs.readFileSync('/tmp/ocr-result.json', 'utf8').trim()
+                : '';
               if (!raw) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: prNumber,
-                  body: 'OpenCodeReview produced no output. This may indicate a failure. Check the workflow logs for details.'
+                  body: `${failureHeader('produced no output')}\n\n${stderr.slice(0, 6000)}`
                 });
                 return;
               }
               parsed = JSON.parse(raw);
               if (!parsed || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
-                const stderr = fs.existsSync('/tmp/ocr-stderr.log') ? fs.readFileSync('/tmp/ocr-stderr.log', 'utf8') : '';
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: prNumber,
-                  body: `OpenCodeReview produced empty output. This may indicate a failure.\n\n${stderr.slice(0, 6000)}`
+                  body: `${failureHeader('produced empty output')}\n\n${stderr.slice(0, 6000)}`
                 });
                 return;
               }
             } catch (e) {
-              const stderr = fs.existsSync('/tmp/ocr-stderr.log') ? fs.readFileSync('/tmp/ocr-stderr.log', 'utf8') : '';
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: prNumber,
-                body: `OpenCodeReview failed to parse output.\n\n${stderr.slice(0, 6000)}`
+                body: `${failureHeader('failed to parse output')}\n\n${stderr.slice(0, 6000)}`
               });
               return;
             }
@@ -282,16 +300,7 @@ jobs:
 
             if (comments.length === 0) {
               let body = `OpenCodeReview: No actionable issues found.\n\n`;
-              // Surface partial-review metadata so reviewers see coverage gaps.
-              if (parsed.status === 'completed_with_errors') {
-                body += `⚠️ OCR status: **${parsed.status}**\n\n`;
-                if (parsed.message) body += `${parsed.message}\n\n`;
-                if (Array.isArray(parsed.warnings) && parsed.warnings.length > 0) {
-                  body += `Warnings:\n`;
-                  for (const w of parsed.warnings) body += `- ${formatWarning(w)}\n`;
-                  body += '\n';
-                }
-              }
+              body += partialCoverageBlock(parsed);
               body += filterDebug;
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -319,15 +328,7 @@ jobs:
             }
 
             let summary = `OpenCodeReview found ${comments.length} actionable issue(s).\n\n`;
-            if (parsed.status === 'completed_with_errors') {
-              summary += `⚠️ OCR status: **${parsed.status}**\n\n`;
-              if (parsed.message) summary += `${parsed.message}\n\n`;
-              if (Array.isArray(parsed.warnings) && parsed.warnings.length > 0) {
-                summary += `Warnings:\n`;
-                for (const w of parsed.warnings) summary += `- ${formatWarning(w)}\n`;
-                summary += '\n';
-              }
-            }
+            summary += partialCoverageBlock(parsed);
             summary += `- ${inlineComments.length} inline comment(s)\n`;
             summary += `- ${summaryOnly.length} summary comment(s)\n\n`;
             summary += filterDebug;
@@ -482,6 +483,26 @@ jobs:
               const matches = String(content || '').match(/`+/g) || [];
               const maxTicks = matches.reduce((max, m) => Math.max(max, m.length), 0);
               return '`'.repeat(Math.max(3, maxTicks + 1));
+            }
+
+            function partialCoverageBlock(parsed) {
+              // Surface any partial-review metadata so reviewers see coverage
+              // gaps. Triggered by either an explicit non-success status
+              // (e.g. completed_with_errors, completed_with_warnings) or by
+              // the presence of warnings such as token_threshold_exceeded.
+              const status = parsed && parsed.status ? String(parsed.status) : '';
+              const warnings = Array.isArray(parsed && parsed.warnings) ? parsed.warnings : [];
+              const isPartial = (status && status !== 'completed' && status !== 'success') || warnings.length > 0;
+              if (!isPartial) return '';
+
+              let block = `⚠️ OCR status: **${status || 'completed_with_warnings'}**\n\n`;
+              if (parsed.message) block += `${parsed.message}\n\n`;
+              if (warnings.length > 0) {
+                block += `Warnings:\n`;
+                for (const w of warnings) block += `- ${formatWarning(w)}\n`;
+                block += '\n';
+              }
+              return block;
             }
 
             function formatWarning(w) {
