@@ -183,13 +183,13 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Check Tailscale org secrets are visible
+      - name: Check Tailscale org variables are visible
         if: steps.detect.outputs.present == 'true'
         env:
-          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_OAUTH_CLIENT_ID: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ vars.TS_OAUTH_SECRET }}
         run: |
-          # Diagnostic: verify the repository can read the Tailscale OAuth secrets.
+          # Diagnostic: verify the repository can read the Tailscale OAuth variables.
           # Length is printed; values remain masked by GitHub if non-empty.
           echo "TS_OAUTH_CLIENT_ID length: ${#TS_OAUTH_CLIENT_ID}"
           echo "TS_OAUTH_SECRET length: ${#TS_OAUTH_SECRET}"
@@ -199,8 +199,8 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ vars.TS_OAUTH_SECRET }}
           tags: tag:ci
 
       - name: Resolve Andorra Review HEAD SHA (cache key source)
