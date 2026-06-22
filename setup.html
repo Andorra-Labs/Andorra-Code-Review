@@ -174,35 +174,14 @@
     top: 12px;
     right: 12px;
   }
-  /* Worker rows */
-  .worker-row {
+  /* Active provider row */
+  .active-row {
     display: grid;
-    grid-template-columns: 1fr 1fr 28px;
-    gap: 10px;
-    align-items: end;
-    margin-bottom: 10px;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
   }
-  /* Mode switch */
-  .mode-switch {
-    display: inline-flex;
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    margin-bottom: 16px;
-  }
-  .mode-switch button {
-    background: transparent;
-    border: none;
-    color: var(--text-dim);
-    padding: 8px 16px;
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .mode-switch button.active {
-    background: var(--accent-strong);
-    color: white;
+  @media (max-width: 640px) {
+    .active-row { grid-template-columns: 1fr; }
   }
   /* Buttons */
   button.add-btn {
@@ -305,7 +284,7 @@
 <div class="wrap">
 
 <h1>OpenCodeReview Setup</h1>
-<p class="tagline">Define LLM providers and assign models to scanners + an arbiter for multi-LLM review. Generates a <code class="inline">config.json</code> the <code class="inline">ocr</code> CLI can read.</p>
+<p class="tagline">Define LLM providers and pick an active provider/model. Generates a <code class="inline">config.json</code> the <code class="inline">ocr</code> CLI can read.</p>
 
 <div class="panel">
   <h2>Import existing config <span style="color:var(--text-dim);font-weight:400;font-size:14px">(optional)</span></h2>
@@ -323,46 +302,31 @@
   <div id="providersList"></div>
   <button class="add-btn" id="addProvider" type="button">+ Add provider</button>
   <div class="warning">
-    API keys are saved in plaintext in the downloaded file. For CI use, enter an env
-    placeholder such as <code class="inline">${env:OCR_ANTHROPIC_API_KEY}</code>; blank
-    keys work only when the chosen provider preset supplies its own environment
-    variable fallback. For local use, <code class="inline">chmod 600 ~/.opencodereview/config.json</code>
-    after saving.
+    API keys are saved in plaintext in the downloaded file. For preset providers,
+    leave the key blank and set the provider's documented environment variable.
+    Custom providers require a real key here. For local use,
+    <code class="inline">chmod 600 ~/.opencodereview/config.json</code> after saving.
   </div>
 </div>
 
 <div class="panel">
-  <h2>Workers</h2>
-  <p class="hint">Pick which (provider, model) handles each role.</p>
-
-  <h3>Scanners</h3>
-  <p class="hint">Each scanner independently reviews the diff. Add multiple to compare or cross-check.</p>
-  <div class="mode-switch">
-    <button id="modeParallel" type="button" class="active">Parallel</button>
-    <button id="modeSerial" type="button">Serial (1 at a time)</button>
-  </div>
-  <p class="hint" id="modeHint">All scanners run at once. Faster, but every scanner draws GPU/API quota concurrently.</p>
-  <div id="scannersList"></div>
-  <button class="add-btn" id="addScanner" type="button">+ Add scanner</button>
-
-  <h3>Arbiter</h3>
-  <p class="hint">Cross-checks scanner findings and produces the final review.</p>
-  <div class="worker-row" id="arbiterRow">
+  <h2>Active provider</h2>
+  <p class="hint">Select the provider and model the CLI will use by default.</p>
+  <div class="active-row" id="activeRow">
     <div>
       <label>Provider</label>
-      <select id="arbiterProvider"></select>
+      <select id="activeProvider"></select>
     </div>
     <div>
       <label>Model</label>
-      <select id="arbiterModel"></select>
+      <select id="activeModel"></select>
     </div>
-    <div></div>
   </div>
 </div>
 
 <div class="panel">
   <h2>Preview</h2>
-  <p class="hint">This is the <code class="inline">config.json</code> that will be downloaded.</p>
+  <p class="hint">This is the <code class="inline">config.json</code> that will be downloaded. API keys are shown masked here but written in full to the downloaded file.</p>
   <pre id="preview">{}</pre>
   <div class="actions">
     <button class="primary" id="downloadBtn" type="button">Download config.json</button>
@@ -398,10 +362,9 @@ const $ = (id) => document.getElementById(id);
 /* ───── state ─────────────────────────────────────────────────────────── */
 
 const state = {
-  providers: [],         // [{ id, name, url, protocol, api_key, models: [] }]
-  scanners: [],          // [{ id, provider, model }]
-  scanner_mode: "parallel",
-  arbiter: { provider: "", model: "" },
+  providers: [],         // [{ id, name, url, protocol, api_key, auth_header, extra_body, models: [] }]
+  activeProvider: "",
+  activeModel: "",
 };
 
 let nextId = 1;
@@ -423,52 +386,40 @@ function allProviderNames() {
   return state.providers.map((p) => p.name).filter(Boolean);
 }
 
+function presetProtocol(name) {
+  // The Go resolver defaults anthropic preset to anthropic protocol; openai-style
+  // presets to openai. Without importing the full provider table we mirror the
+  // obvious cases and default to openai for the rest.
+  if (name === "anthropic") return "anthropic";
+  return "openai";
+}
+
+/* ───── rendering helpers ─────────────────────────────────────────────── */
+
+let renderTimer = null;
+function scheduleRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => {
+    renderTimer = null;
+    render();
+  }, 100);
+}
+
 /* ───── providers ─────────────────────────────────────────────────────── */
 
-function addProvider(seed) {
-  const p = Object.assign({
-    id: uid(),
-    name: "",
-    url: "",
-    protocol: "openai",
-    api_key: "",
-    models: [],
-  }, seed || {});
-  state.providers.push(p);
-  renderProviders();
-  refreshWorkerSelects();
-  render();
-}
+const PROVIDER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const PROVIDER_NAME_HINT = "Use letters, numbers, hyphens and underscores only.";
 
-function removeProvider(id) {
-  const removed = state.providers.find((p) => p.id === id);
-  state.providers = state.providers.filter((p) => p.id !== id);
-  // Clear any workers that pointed at this provider.
-  if (removed) {
-    state.scanners = state.scanners.map((s) =>
-      s.provider === removed.name ? { ...s, provider: "", model: "" } : s
-    );
-    if (state.arbiter.provider === removed.name) {
-      state.arbiter = { provider: "", model: "" };
-    }
+function validateProviderName(input, msgEl) {
+  const v = input.value.trim();
+  if (!v || PROVIDER_NAME_RE.test(v)) {
+    msgEl.textContent = "";
+    input.classList.remove("invalid");
+    return true;
   }
-  renderProviders();
-  renderScanners();
-  refreshWorkerSelects();
-  render();
-}
-
-function renderProviders() {
-  const list = $("providersList");
-  list.innerHTML = "";
-  if (state.providers.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "No providers yet. Click “+ Add provider” below to start.";
-    list.appendChild(empty);
-    return;
-  }
-  for (const p of state.providers) list.appendChild(providerCard(p));
+  msgEl.textContent = PROVIDER_NAME_HINT;
+  input.classList.add("invalid");
+  return false;
 }
 
 function validateURL(input, msgEl) {
@@ -490,6 +441,48 @@ function validateURL(input, msgEl) {
   }
 }
 
+function addProvider(seed) {
+  const p = Object.assign({
+    id: uid(),
+    name: "",
+    url: "",
+    protocol: "openai",
+    api_key: "",
+    auth_header: "",
+    extra_body: null,
+    models: [],
+  }, seed || {});
+  state.providers.push(p);
+  renderProviders();
+  renderActiveSelects();
+  scheduleRender();
+}
+
+function removeProvider(id) {
+  const removed = state.providers.find((p) => p.id === id);
+  state.providers = state.providers.filter((p) => p.id !== id);
+  if (removed && state.activeProvider === removed.name) {
+    state.activeProvider = "";
+    state.activeModel = "";
+  }
+  renderProviders();
+  renderActiveSelects();
+  scheduleRender();
+}
+
+function renderProviders() {
+  const list = $("providersList");
+  list.innerHTML = "";
+  if (state.providers.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No providers yet. Click “+ Add provider” below to start.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const p of state.providers) list.appendChild(providerCard(p));
+}
+
 function providerCard(p) {
   const card = document.createElement("div");
   card.className = "provider-card";
@@ -502,6 +495,7 @@ function providerCard(p) {
       <div class="row">
         <label>Name (alias)</label>
         <input type="text" data-field="name" placeholder="anthropic-prod, openai-team-a, on-prem">
+        <div class="validation-msg" data-field="name-validation"></div>
       </div>
       <div class="row">
         <label>Protocol</label>
@@ -512,7 +506,7 @@ function providerCard(p) {
       </div>
       <div class="row">
         <label>API key (optional)</label>
-        <input type="password" data-field="api_key" placeholder="preset: leave blank for env fallback; custom: use \${env:NAME} for CI">
+        <input type="password" data-field="api_key" placeholder="preset: leave blank for env fallback; custom: enter key">
       </div>
     </div>
     <div class="row">
@@ -542,19 +536,20 @@ function providerCard(p) {
       const oldName = p.name;
       p[field] = el.value;
       if (field === "name") {
-        // Re-point workers that referenced the old name.
         const newName = el.value;
-        for (const s of state.scanners) if (s.provider === oldName) s.provider = newName;
-        if (state.arbiter.provider === oldName) state.arbiter.provider = newName;
-        refreshWorkerSelects();
+        if (state.activeProvider === oldName) {
+          state.activeProvider = newName;
+        }
+        renderActiveSelects();
       }
+      if (field === "name") validateProviderName(el, card.querySelector('[data-field="name-validation"]'));
       if (field === "url") validateURL(el, card.querySelector('[data-field="url-validation"]'));
-      render();
+      scheduleRender();
     });
   });
   card.querySelector('[data-field="protocol"]').addEventListener("change", (e) => {
     p.protocol = e.target.value;
-    render();
+    scheduleRender();
   });
   const modelInput = card.querySelector('[data-field="model-input"]');
   modelInput.addEventListener("keydown", (e) => {
@@ -564,8 +559,8 @@ function providerCard(p) {
       if (v && !p.models.includes(v)) p.models.push(v);
       modelInput.value = "";
       renderModels(card, p);
-      refreshWorkerSelects();
-      render();
+      renderActiveSelects();
+      scheduleRender();
     }
   });
 
@@ -586,8 +581,8 @@ function renderModels(card, p) {
     x.addEventListener("click", () => {
       p.models = p.models.filter((mm) => mm !== m);
       renderModels(card, p);
-      refreshWorkerSelects();
-      render();
+      renderActiveSelects();
+      scheduleRender();
     });
     chip.appendChild(x);
     list.appendChild(chip);
@@ -596,99 +591,23 @@ function renderModels(card, p) {
 
 $("addProvider").addEventListener("click", () => addProvider());
 
-/* ───── scanners ──────────────────────────────────────────────────────── */
+/* ───── active provider ───────────────────────────────────────────────── */
 
-function addScanner(seed) {
-  const s = Object.assign({ id: uid(), provider: "", model: "" }, seed || {});
-  state.scanners.push(s);
-  renderScanners();
-  render();
+function renderActiveSelects() {
+  populateProviderSelect($("activeProvider"), state.activeProvider);
+  populateModelSelect($("activeModel"), state.activeProvider, state.activeModel);
 }
 
-function removeScanner(id) {
-  state.scanners = state.scanners.filter((s) => s.id !== id);
-  renderScanners();
-  render();
-}
-
-function renderScanners() {
-  const list = $("scannersList");
-  list.innerHTML = "";
-  if (state.scanners.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "No scanners yet. Click “+ Add scanner” below.";
-    list.appendChild(empty);
-    return;
-  }
-  for (const s of state.scanners) list.appendChild(scannerRow(s));
-}
-
-function scannerRow(s) {
-  const row = document.createElement("div");
-  row.className = "worker-row";
-  row.innerHTML = `
-    <div>
-      <label>Provider</label>
-      <select data-field="provider"></select>
-    </div>
-    <div>
-      <label>Model</label>
-      <select data-field="model"></select>
-    </div>
-    <div>
-      <button class="icon-btn" data-act="remove" title="Remove scanner" type="button">×</button>
-    </div>
-  `;
-  populateProviderSelect(row.querySelector('[data-field="provider"]'), s.provider);
-  populateModelSelect(row.querySelector('[data-field="model"]'), s.provider, s.model);
-  row.querySelector('[data-field="provider"]').addEventListener("change", (e) => {
-    s.provider = e.target.value;
-    s.model = ""; // reset model when provider changes
-    populateModelSelect(row.querySelector('[data-field="model"]'), s.provider, "");
-    render();
-  });
-  row.querySelector('[data-field="model"]').addEventListener("change", (e) => {
-    s.model = e.target.value;
-    render();
-  });
-  row.querySelector('[data-act="remove"]').addEventListener("click", () => removeScanner(s.id));
-  return row;
-}
-
-$("addScanner").addEventListener("click", () => addScanner());
-
-/* Mode switch */
-function setMode(m) {
-  state.scanner_mode = m;
-  $("modeParallel").classList.toggle("active", m === "parallel");
-  $("modeSerial").classList.toggle("active", m === "serial");
-  $("modeHint").textContent = m === "parallel"
-    ? "All scanners run at once. Faster, but every scanner draws GPU/API quota concurrently."
-    : "Scanners run one at a time. Slower, but caps GPU/API load to a single model.";
-  render();
-}
-$("modeParallel").addEventListener("click", () => setMode("parallel"));
-$("modeSerial").addEventListener("click", () => setMode("serial"));
-
-/* ───── arbiter ───────────────────────────────────────────────────────── */
-
-function renderArbiter() {
-  populateProviderSelect($("arbiterProvider"), state.arbiter.provider);
-  populateModelSelect($("arbiterModel"), state.arbiter.provider, state.arbiter.model);
-}
-$("arbiterProvider").addEventListener("change", (e) => {
-  state.arbiter.provider = e.target.value;
-  state.arbiter.model = "";
-  populateModelSelect($("arbiterModel"), state.arbiter.provider, "");
-  render();
+$("activeProvider").addEventListener("change", (e) => {
+  state.activeProvider = e.target.value;
+  state.activeModel = "";
+  renderActiveSelects();
+  scheduleRender();
 });
-$("arbiterModel").addEventListener("change", (e) => {
-  state.arbiter.model = e.target.value;
-  render();
+$("activeModel").addEventListener("change", (e) => {
+  state.activeModel = e.target.value;
+  scheduleRender();
 });
-
-/* ───── shared select population ──────────────────────────────────────── */
 
 function populateProviderSelect(sel, current) {
   sel.innerHTML = "";
@@ -719,24 +638,21 @@ function populateModelSelect(sel, providerName, current) {
   sel.value = current || "";
 }
 
-function refreshWorkerSelects() {
-  // Re-render scanners and arbiter so their dropdowns pick up new provider/model lists.
-  renderScanners();
-  renderArbiter();
-}
-
 /* ───── output ────────────────────────────────────────────────────────── */
 
 function buildConfig() {
-  const cfg = { custom_providers: {}, providers: {}, workers: { scanners: [], scanner_mode: state.scanner_mode, arbiter: null } };
+  const cfg = { custom_providers: {}, providers: {} };
   for (const p of state.providers) {
     if (!p.name) continue;
+    if (!PROVIDER_NAME_RE.test(p.name)) continue;
     const entry = { protocol: p.protocol };
     if (p.url) entry.url = p.url;
     if (p.api_key) entry.api_key = p.api_key;
+    if (p.auth_header) entry.auth_header = p.auth_header;
     if (p.models.length > 0) entry.models = [...p.models];
-    // Anthropic-compatible custom endpoints need the x-api-key header.
-    if (p.protocol === "anthropic") entry.auth_header = "x-api-key";
+    if (p.extra_body && typeof p.extra_body === "object" && Object.keys(p.extra_body).length > 0) {
+      entry.extra_body = JSON.parse(JSON.stringify(p.extra_body));
+    }
     if (PRESET_NAMES.has(p.name)) {
       cfg.providers[p.name] = entry;
     } else {
@@ -745,22 +661,33 @@ function buildConfig() {
   }
   if (Object.keys(cfg.providers).length === 0) delete cfg.providers;
   if (Object.keys(cfg.custom_providers).length === 0) delete cfg.custom_providers;
-  for (const s of state.scanners) {
-    if (!s.provider || !s.model) continue;
-    cfg.workers.scanners.push({ provider: s.provider, model: s.model });
-  }
-  if (state.arbiter.provider && state.arbiter.model) {
-    cfg.workers.arbiter = { provider: state.arbiter.provider, model: state.arbiter.model };
-    // Also set the top-level provider/model so the current CLI (which doesn't
-    // yet know about workers) still has a valid endpoint via the arbiter.
-    cfg.provider = state.arbiter.provider;
-    cfg.model = state.arbiter.model;
+  if (state.activeProvider && state.activeModel) {
+    cfg.provider = state.activeProvider;
+    cfg.model = state.activeModel;
   }
   return cfg;
 }
 
+function maskConfig(cfg) {
+  // Return a deep copy with api_key values masked for the live preview only.
+  const mask = (obj) => {
+    if (!obj || typeof obj !== "object") return obj;
+    if (Array.isArray(obj)) return obj.map(mask);
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === "api_key" && typeof v === "string" && v.length > 0) {
+        out[k] = v.length <= 8 ? "•".repeat(v.length) : v.slice(0, 2) + "•".repeat(v.length - 4) + v.slice(-2);
+      } else {
+        out[k] = mask(v);
+      }
+    }
+    return out;
+  };
+  return mask(cfg);
+}
+
 function render() {
-  $("preview").textContent = JSON.stringify(buildConfig(), null, 2);
+  $("preview").textContent = JSON.stringify(maskConfig(buildConfig()), null, 2);
 }
 
 /* ───── import ────────────────────────────────────────────────────────── */
@@ -770,37 +697,59 @@ function importConfig(cfg) {
 
   // Reset state.
   state.providers = [];
-  state.scanners = [];
-  state.scanner_mode = "parallel";
-  state.arbiter = { provider: "", model: "" };
+  state.activeProvider = "";
+  state.activeModel = "";
 
   const cp = (cfg.custom_providers && typeof cfg.custom_providers === "object") ? cfg.custom_providers : {};
-  // Also fold any legacy `providers.<name>` entries in so a CLI-managed
-  // config.json round-trips at least the keys we can represent.
   const providers = (cfg.providers && typeof cfg.providers === "object") ? cfg.providers : {};
   const merge = Object.assign({}, providers, cp);
 
   for (const [name, raw] of Object.entries(merge)) {
     if (!raw || typeof raw !== "object") continue;
+    let protocol = raw.protocol;
+    if (!protocol) {
+      protocol = PRESET_NAMES.has(name) ? presetProtocol(name) : "openai";
+    } else {
+      protocol = protocol === "anthropic" ? "anthropic" : "openai";
+    }
+    const models = [];
+    if (Array.isArray(raw.models)) models.push(...raw.models);
+    if (raw.model && !models.includes(raw.model)) models.push(raw.model);
     state.providers.push({
       id: uid(),
       name,
       url: raw.url || "",
-      protocol: raw.protocol === "anthropic" ? "anthropic" : "openai",
+      protocol,
       api_key: raw.api_key || "",
-      models: Array.isArray(raw.models) ? [...raw.models] : (raw.model ? [raw.model] : []),
+      auth_header: raw.auth_header || "",
+      extra_body: raw.extra_body || null,
+      models,
     });
   }
 
-  if (cfg.workers && typeof cfg.workers === "object") {
-    const w = cfg.workers;
-    if (Array.isArray(w.scanners)) {
-      for (const s of w.scanners) {
-        if (s && typeof s === "object") state.scanners.push({ id: uid(), provider: s.provider || "", model: s.model || "" });
-      }
+  // Determine the active provider/model.
+  let activeProvider = cfg.provider || "";
+  let activeModel = cfg.model || "";
+  if (!activeProvider && cfg.workers && cfg.workers.arbiter) {
+    activeProvider = cfg.workers.arbiter.provider || "";
+    activeModel = cfg.workers.arbiter.model || "";
+  }
+  if (activeProvider) {
+    const matched = state.providers.find((p) => p.name === activeProvider);
+    if (matched && activeModel && !matched.models.includes(activeModel)) {
+      matched.models.unshift(activeModel);
     }
-    if (w.scanner_mode === "serial" || w.scanner_mode === "parallel") state.scanner_mode = w.scanner_mode;
-    if (w.arbiter && typeof w.arbiter === "object") state.arbiter = { provider: w.arbiter.provider || "", model: w.arbiter.model || "" };
+    // Also honor provider-entry model when no top-level model was set.
+    if (matched && !activeModel) {
+      const entryModel = (cfg.providers && cfg.providers[activeProvider] && cfg.providers[activeProvider].model) ||
+                         (cfg.custom_providers && cfg.custom_providers[activeProvider] && cfg.custom_providers[activeProvider].model);
+      if (entryModel && !matched.models.includes(entryModel)) {
+        matched.models.unshift(entryModel);
+      }
+      activeModel = entryModel || "";
+    }
+    state.activeProvider = activeProvider;
+    state.activeModel = activeModel;
   }
 
   // Preserve a legacy top-level `llm` block as a provider so a working
@@ -809,35 +758,23 @@ function importConfig(cfg) {
     const legacy = cfg.llm;
     const legacyName = "legacy-llm";
     if (!state.providers.some((p) => p.name === legacyName)) {
+      const models = [];
+      if (legacy.model) models.push(legacy.model);
       state.providers.push({
         id: uid(),
         name: legacyName,
         url: legacy.url || "",
         protocol: legacy.use_anthropic === false ? "openai" : "anthropic",
         api_key: legacy.auth_token || "",
-        models: legacy.model ? [legacy.model] : [],
+        auth_header: legacy.auth_header || "",
+        extra_body: legacy.extra_body || null,
+        models,
       });
     }
   }
 
-  // Fall back: if no workers but cfg.provider is set, seed arbiter from it.
-  if (!state.arbiter.provider && cfg.provider) {
-    state.arbiter.provider = cfg.provider;
-  }
-  // Top-level cfg.model may be the only model reference for provider-based
-  // configs; make sure it is selectable and selected.
-  if (cfg.provider && cfg.model) {
-    const matched = state.providers.find((p) => p.name === cfg.provider);
-    if (matched) {
-      if (!matched.models.includes(cfg.model)) matched.models.unshift(cfg.model);
-      state.arbiter.model = cfg.model;
-    }
-  }
-
-  setMode(state.scanner_mode);
   renderProviders();
-  renderScanners();
-  renderArbiter();
+  renderActiveSelects();
   render();
 }
 
@@ -846,6 +783,13 @@ $("importFile").addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
   const status = $("importStatus");
+  const MAX_SIZE = 1 * 1024 * 1024; // 1 MB
+  if (file.size > MAX_SIZE) {
+    status.style.color = "var(--danger)";
+    status.textContent = `Could not load ${file.name}: file exceeds 1 MB limit.`;
+    e.target.value = "";
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     try {
@@ -895,8 +839,7 @@ $("copyBtn").addEventListener("click", async () => {
 /* ───── initial render ────────────────────────────────────────────────── */
 
 renderProviders();
-renderScanners();
-renderArbiter();
+renderActiveSelects();
 render();
 </script>
 </body>

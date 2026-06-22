@@ -120,6 +120,26 @@ jobs:
           # the PR head is checked out so review-tool changes are live-tested.
           ref: ${{ github.event_name == 'issue_comment' && steps.pr-context.outputs.base_ref || github.event.pull_request.head.sha || github.sha }}
 
+      - name: Fetch base branch
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
+          else
+            BASE_REF="${{ steps.pr-context.outputs.base_ref }}"
+          fi
+          git fetch origin "${BASE_REF}:${BASE_REF}" || git fetch origin "${BASE_REF}"
+
+      - name: Fetch PR head ref
+        if: github.event_name == 'issue_comment'
+        shell: bash
+        run: |
+          # The PR head lives in the contributor's fork; fetch it as a named
+          # ref so the review step can diff against it without building from
+          # potentially untrusted source.
+          PR_NUMBER="${{ github.event.issue.number }}"
+          git fetch origin "pull/${PR_NUMBER}/head:pr-head"
+
       - name: Validate checkout ref
         if: github.event_name == 'issue_comment'
         shell: bash
@@ -141,26 +161,6 @@ jobs:
             echo "ERROR: PR head SHA $EXPECTED_HEAD_SHA is not available"
             exit 1
           fi
-
-      - name: Fetch base branch
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_REF="${{ github.event.pull_request.base.ref }}"
-          else
-            BASE_REF="${{ steps.pr-context.outputs.base_ref }}"
-          fi
-          git fetch origin "${BASE_REF}:${BASE_REF}" || git fetch origin "${BASE_REF}"
-
-      - name: Fetch PR head ref
-        if: github.event_name == 'issue_comment'
-        shell: bash
-        run: |
-          # The PR head lives in the contributor's fork; fetch it as a named
-          # ref so the review step can diff against it without building from
-          # potentially untrusted source.
-          PR_NUMBER="${{ github.event.issue.number }}"
-          git fetch origin "pull/${PR_NUMBER}/head:pr-head"
 
       - name: Setup Go
         uses: actions/setup-go@v5
