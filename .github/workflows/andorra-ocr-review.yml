@@ -293,6 +293,7 @@ jobs:
 
       - name: Run ensemble review (trusted binary + base config/rules + sandboxed PR data)
         if: steps.detect.outputs.present == 'true'
+        id: review
         working-directory: pr-head
         env:
           # Forward the whole secrets blob so the run script can derive
@@ -363,6 +364,8 @@ jobs:
           # Don't leak the JSON blob to the child process.
           unset ALL_SECRETS_JSON
 
+          # --debug-trace is written even when every scanner fails, and stderr
+          # is captured to a file so failures can be diagnosed from artifacts.
           opencodereview review \
             --ensemble \
             --config ../.ocr/config.json \
@@ -370,7 +373,19 @@ jobs:
             --from "origin/${PR_BASE_REF}" \
             --to "${PR_HEAD_SHA}" \
             --format json \
-            > ../review.json
+            --debug-trace ../debug-trace.json \
+            > ../review.json 2> ../review.log
+
+      - name: Upload Andorra Review debug artifacts
+        if: ${{ !cancelled() && steps.detect.outputs.present == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: andorra-review-debug-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            review.log
+            debug-trace.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Post review comments
         if: steps.detect.outputs.present == 'true' && hashFiles('review.json') != ''
