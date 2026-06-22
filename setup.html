@@ -311,7 +311,11 @@
   <div id="providersList"></div>
   <button class="add-btn" id="addProvider" type="button">+ Add provider</button>
   <div class="warning">
-    API keys are saved in plaintext in the downloaded file. For CI use, leave the key blank here and set it as a repository or organization secret instead. For local use, <code class="inline">chmod 600 ~/.opencodereview/config.json</code> after saving.
+    API keys are saved in plaintext in the downloaded file. For CI use, enter an env
+    placeholder such as <code class="inline">${env:OCR_ANTHROPIC_API_KEY}</code>; blank
+    keys work only when the chosen provider preset supplies its own environment
+    variable fallback. For local use, <code class="inline">chmod 600 ~/.opencodereview/config.json</code>
+    after saving.
   </div>
 </div>
 
@@ -391,6 +395,14 @@ const state = {
 let nextId = 1;
 const uid = () => `id-${nextId++}`;
 
+// Preset provider names known to the CLI resolver. These must be written to
+// the `providers` section; everything else goes under `custom_providers`.
+const PRESET_NAMES = new Set([
+  "anthropic", "openai", "dashscope", "dashscope-tokenplan", "deepseek",
+  "hy-tokenplan", "kimi", "mimo", "minimax", "tencent-tokenhub",
+  "volcengine", "z-ai",
+]);
+
 function findProvider(name) {
   return state.providers.find((p) => p.name === name);
 }
@@ -453,7 +465,7 @@ function providerCard(p) {
   card.dataset.id = p.id;
   card.innerHTML = `
     <div class="row-actions">
-      <button class="icon-btn" data-act="remove" title="Remove provider">×</button>
+      <button class="icon-btn" data-act="remove" title="Remove provider" type="button">×</button>
     </div>
     <div class="provider-grid-3">
       <div class="row">
@@ -469,7 +481,7 @@ function providerCard(p) {
       </div>
       <div class="row">
         <label>API key (optional)</label>
-        <input type="password" data-field="api_key" placeholder="leave blank for env/secret">
+        <input type="password" data-field="api_key" placeholder="preset: leave blank for env fallback; custom: use \${env:NAME} for CI">
       </div>
     </div>
     <div class="row">
@@ -592,7 +604,7 @@ function scannerRow(s) {
       <select data-field="model"></select>
     </div>
     <div>
-      <button class="icon-btn" data-act="remove" title="Remove scanner">×</button>
+      <button class="icon-btn" data-act="remove" title="Remove scanner" type="button">×</button>
     </div>
   `;
   populateProviderSelect(row.querySelector('[data-field="provider"]'), s.provider);
@@ -683,15 +695,23 @@ function refreshWorkerSelects() {
 /* ───── output ────────────────────────────────────────────────────────── */
 
 function buildConfig() {
-  const cfg = { custom_providers: {}, workers: { scanners: [], scanner_mode: state.scanner_mode, arbiter: null } };
+  const cfg = { custom_providers: {}, providers: {}, workers: { scanners: [], scanner_mode: state.scanner_mode, arbiter: null } };
   for (const p of state.providers) {
     if (!p.name) continue;
     const entry = { protocol: p.protocol };
     if (p.url) entry.url = p.url;
     if (p.api_key) entry.api_key = p.api_key;
     if (p.models.length > 0) entry.models = [...p.models];
-    cfg.custom_providers[p.name] = entry;
+    // Anthropic-compatible custom endpoints need the x-api-key header.
+    if (p.protocol === "anthropic") entry.auth_header = "x-api-key";
+    if (PRESET_NAMES.has(p.name)) {
+      cfg.providers[p.name] = entry;
+    } else {
+      cfg.custom_providers[p.name] = entry;
+    }
   }
+  if (Object.keys(cfg.providers).length === 0) delete cfg.providers;
+  if (Object.keys(cfg.custom_providers).length === 0) delete cfg.custom_providers;
   for (const s of state.scanners) {
     if (!s.provider || !s.model) continue;
     cfg.workers.scanners.push({ provider: s.provider, model: s.model });
@@ -750,11 +770,35 @@ function importConfig(cfg) {
     if (w.arbiter && typeof w.arbiter === "object") state.arbiter = { provider: w.arbiter.provider || "", model: w.arbiter.model || "" };
   }
 
+  // Preserve a legacy top-level `llm` block as a provider so a working
+  // manual config can still be edited and re-exported.
+  if (cfg.llm && typeof cfg.llm === "object" && cfg.llm.url) {
+    const legacy = cfg.llm;
+    const legacyName = "legacy-llm";
+    if (!state.providers.some((p) => p.name === legacyName)) {
+      state.providers.push({
+        id: uid(),
+        name: legacyName,
+        url: legacy.url || "",
+        protocol: legacy.use_anthropic === false ? "openai" : "anthropic",
+        api_key: legacy.auth_token || "",
+        models: legacy.model ? [legacy.model] : [],
+      });
+    }
+  }
+
   // Fall back: if no workers but cfg.provider is set, seed arbiter from it.
   if (!state.arbiter.provider && cfg.provider) {
     state.arbiter.provider = cfg.provider;
+  }
+  // Top-level cfg.model may be the only model reference for provider-based
+  // configs; make sure it is selectable and selected.
+  if (cfg.provider && cfg.model) {
     const matched = state.providers.find((p) => p.name === cfg.provider);
-    if (matched && cfg.model && matched.models.includes(cfg.model)) state.arbiter.model = cfg.model;
+    if (matched) {
+      if (!matched.models.includes(cfg.model)) matched.models.unshift(cfg.model);
+      state.arbiter.model = cfg.model;
+    }
   }
 
   setMode(state.scanner_mode);
@@ -804,13 +848,15 @@ $("downloadBtn").addEventListener("click", () => {
 });
 
 $("copyBtn").addEventListener("click", async () => {
+  const btn = $("copyBtn");
+  const original = btn.textContent;
   try {
     await navigator.clipboard.writeText(JSON.stringify(buildConfig(), null, 2));
-    const btn = $("copyBtn");
-    const original = btn.textContent;
     btn.textContent = "Copied";
-    setTimeout(() => (btn.textContent = original), 1500);
-  } catch (_) { /* clipboard API may be blocked on file:// */ }
+  } catch (_) {
+    btn.textContent = "Failed";
+  }
+  setTimeout(() => (btn.textContent = original), 1500);
 });
 
 /* ───── initial render ────────────────────────────────────────────────── */

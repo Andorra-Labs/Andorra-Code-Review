@@ -1,9 +1,12 @@
 # OpenCodeReview - GitHub Actions PR Auto-Review
 #
-# The OCR binary is built from this repo's source (cmd/opencodereview) on
-# every run so the workflow exercises the in-tree code rather than Alibaba's
-# published @alibaba-group/open-code-review npm package. This is what lets
-# us live-test review changes via the PR that introduces them.
+# The OCR binary is built from this repo's source (cmd/opencodereview) so the
+# workflow can exercise the in-tree code rather than Alibaba's published
+# @alibaba-group/open-code-review npm package. For `issue_comment` triggers
+# (which have repository secrets), the binary is built from the trusted base
+# ref; the PR head is only fetched as a git ref and treated as review data.
+# For `pull_request` triggers (no fork secrets) the binary is built from the
+# PR head so review-tool changes in the PR are live-tested.
 #
 # Triggers:
 #   - PR opened, synchronized, reopened, or marked ready_for_review
@@ -56,7 +59,7 @@ jobs:
     # the Go build, and a single LLM round-trip. Spark needs the Tailscale
     # action, which requires apt/sudo/daemon control that the slim image
     # doesn't provide — fall back to ubuntu-latest only in that case.
-    runs-on: ${{ vars.LLM_PROVIDER == 'spark' && 'ubuntu-latest' || 'ubuntu-slim' }}
+    runs-on: ${{ contains(fromJSON('["spark", "Spark", "SPARK", " spark", "spark ", " spark "]'), vars.LLM_PROVIDER) && 'ubuntu-latest' || 'ubuntu-slim' }}
     if: |
       github.event_name == 'pull_request' ||
       (
@@ -110,24 +113,32 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # For issue_comment events the head SHA lives in the contributor's
-          # fork, which is not fetched by default. `refs/pull/N/head` is
-          # exposed on the base repo and resolves to that fork commit, so it
-          # is the portable way to check out the PR head from forks.
-          ref: ${{ github.event.pull_request.head.sha || (github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number)) || github.sha }}
+          # For issue_comment events (which have secrets), check out the
+          # trusted base ref so the binary we build never comes from a
+          # potentially untrusted fork PR. The PR head is fetched as a ref
+          # below and used only as diff/review data. For pull_request events
+          # the PR head is checked out so review-tool changes are live-tested.
+          ref: ${{ github.event_name == 'issue_comment' && steps.pr-context.outputs.base_ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Validate checkout ref
         if: github.event_name == 'issue_comment'
         shell: bash
         run: |
-          if [ -z "${{ steps.pr-context.outputs.head_sha }}" ]; then
-            echo "ERROR: Could not resolve PR head SHA from pr-context step"
+          EXPECTED_BASE_REF="${{ steps.pr-context.outputs.base_ref }}"
+          EXPECTED_HEAD_SHA="${{ steps.pr-context.outputs.head_sha }}"
+          if [ -z "$EXPECTED_BASE_REF" ] || [ -z "$EXPECTED_HEAD_SHA" ]; then
+            echo "ERROR: Could not resolve PR context from pr-context step"
             exit 1
           fi
           CURRENT_SHA=$(git rev-parse HEAD)
-          echo "Checked out SHA: $CURRENT_SHA"
+          echo "Checked out base ref SHA: $CURRENT_SHA"
           if [ -z "$CURRENT_SHA" ] || [ "$CURRENT_SHA" = "0000000000000000000000000000000000000000" ]; then
             echo "ERROR: Failed to checkout valid revision"
+            exit 1
+          fi
+          # Ensure the PR head commit is available for the diff/review step.
+          if ! git rev-parse --verify "${EXPECTED_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+            echo "ERROR: PR head SHA $EXPECTED_HEAD_SHA is not available"
             exit 1
           fi
 
@@ -141,6 +152,16 @@ jobs:
           fi
           git fetch origin "${BASE_REF}:${BASE_REF}" || git fetch origin "${BASE_REF}"
 
+      - name: Fetch PR head ref
+        if: github.event_name == 'issue_comment'
+        shell: bash
+        run: |
+          # The PR head lives in the contributor's fork; fetch it as a named
+          # ref so the review step can diff against it without building from
+          # potentially untrusted source.
+          PR_NUMBER="${{ github.event.issue.number }}"
+          git fetch origin "pull/${PR_NUMBER}/head:pr-head"
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -148,10 +169,10 @@ jobs:
           cache: true
 
       - name: Build OCR from source
-        # Build this repo's OCR binary so the workflow exercises the code on
-        # the PR, not Alibaba's published @alibaba-group/open-code-review npm
-        # release. Using the in-tree build is what makes live testing of the
-        # review tool possible from CI.
+        # Build this repo's OCR binary. For pull_request events this compiles
+        # the PR head so review-tool changes are live-tested. For issue_comment
+        # events the checkout step already placed us on the trusted base ref,
+        # so the binary that receives secrets is never built from a fork PR.
         shell: bash
         run: |
           make build
