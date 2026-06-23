@@ -1,5 +1,6 @@
 // Package configstore is the fork-owned ensemble-extension layer over the
-// upstream config file (~/.opencodereview/config.json).
+// upstream config file (~/.opencodereview/config.json). It owns the
+// ensemble/scanners/arbiter/dedup config blocks and their validation.
 //
 // It deliberately does NOT relocate upstream's Config struct from
 // cmd/opencodereview/config_cmd.go. Upstream rebases must continue to apply
