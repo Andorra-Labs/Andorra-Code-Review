@@ -358,6 +358,10 @@ jobs:
         working-directory: pr-head
         env:
           STATUS_COMMENT_ID: ${{ steps.status.outputs.comment_id }}
+          # The progress-monitor wrapper (run: below) PATCHes the status
+          # comment via the REST API, so it needs the token in its env.
+          # GITHUB_TOKEN is not injected automatically — it must be mapped.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Forward the whole secrets blob so the run script can derive
           # OCR_<UPPER_PROVIDER>_API_KEY for each provider referenced in
           # .ocr/config.json. Hardcoding one env entry per provider here
@@ -548,6 +552,22 @@ jobs:
 
           checkpoint(f'OCR subprocess finished with exit code {proc.returncode}')
           print('::endgroup::')
+
+          # On any failure (e.g. the LLM gateway is unreachable / no models
+          # loaded), surface OCR's captured stderr directly in the Actions run
+          # log so the cause is visible without downloading the review.log
+          # artifact. We don't try to recover — the workflow still fails.
+          if proc.returncode != 0:
+              print(f'::group::Andorra Review failed (exit {proc.returncode}) — review.log')
+              try:
+                  with open(log_file) as lf:
+                      log_text = lf.read()
+                  sys.stdout.write(log_text if log_text.strip() else '(review.log is empty)\n')
+              except OSError as e:
+                  print(f'(could not read {log_file}: {e})')
+              print('::endgroup::')
+              print(f'::error::Andorra Review failed with exit code {proc.returncode} — see review.log above')
+
           sys.exit(proc.returncode)
           PY
 

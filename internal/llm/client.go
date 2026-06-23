@@ -1,5 +1,6 @@
 // Package llm provides LLM client interfaces supporting multiple protocols.
-// Supported protocols: Anthropic Messages API, OpenAI Chat Completions API.
+// Supported protocols: Anthropic Messages API, OpenAI Chat Completions API,
+// and AWS Bedrock (Anthropic InvokeModel envelope).
 package llm
 
 import (
