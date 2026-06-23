@@ -44,13 +44,13 @@ on:
   issue_comment:
     types: [created]
 
-# Per-PR concurrency: a new push (synchronize) or a fresh @andorra comment
-# cancels any in-flight review against the prior commit, so stale runs
-# can't post review comments after a newer run finishes. Both event types
-# expose a PR number under different paths — `||` picks whichever is set.
+# Global concurrency: only one Andorra Review run is active at a time across the
+# whole repository. This keeps a single shared LLM endpoint from being swamped
+# by simultaneous reviews on multiple PRs. New triggers queue instead of
+# cancelling the in-flight run.
 concurrency:
-  group: andorra-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  group: andorra-review-${{ github.repository }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
