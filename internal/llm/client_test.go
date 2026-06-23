@@ -52,6 +52,51 @@ func TestNewOpenAIClient_URLNormalization(t *testing.T) {
 	}
 }
 
+// TestOpenAIClient_RequestPathPreservesBasePath guards against the SDK dropping
+// the configured base path (e.g. "/v1") during relative-reference resolution,
+// which surfaced as 404s like POST ".../chat/completions" for a config URL of
+// ".../v1". See ensureTrailingSlash in client.go.
+func TestOpenAIClient_RequestPathPreservesBasePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		basePath string
+		wantPath string
+	}{
+		{name: "v1 base path", basePath: "/v1", wantPath: "/v1/chat/completions"},
+		{name: "v1 base path with trailing slash", basePath: "/v1/", wantPath: "/v1/chat/completions"},
+		{name: "nested base path", basePath: "/openai/v1", wantPath: "/openai/v1/chat/completions"},
+		{name: "bare host", basePath: "", wantPath: "/chat/completions"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPath string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+			}))
+			defer server.Close()
+
+			client := NewOpenAIClient(ClientConfig{
+				URL:    server.URL + tt.basePath,
+				APIKey: "test",
+				Model:  "m",
+			})
+			if _, err := client.CompletionsWithCtx(context.Background(), ChatRequest{
+				Messages:  []Message{{Role: "user", Content: "ping"}},
+				MaxTokens: 16,
+			}); err != nil {
+				t.Fatalf("CompletionsWithCtx: %v", err)
+			}
+			if gotPath != tt.wantPath {
+				t.Errorf("request path = %q, want %q", gotPath, tt.wantPath)
+			}
+		})
+	}
+}
+
 func TestNewAnthropicClient_URLNormalization(t *testing.T) {
 	tests := []struct {
 		name     string

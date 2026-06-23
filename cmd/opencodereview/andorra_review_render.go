@@ -218,15 +218,36 @@ type ensembleJSONReport struct {
 }
 
 func outputEnsembleJSON(comments []model.LlmComment, res ensemble.Result, finals []finding.FinalFinding, arbiterUsage finding.TokenUsage, rows []tokenRow, dur time.Duration) error {
+	env := buildEnsembleJSON(comments, res, finals, arbiterUsage, rows, dur)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(env)
+}
+
+// buildEnsembleJSON assembles the JSON envelope for an ensemble run. Slice
+// fields are coerced to empty (never nil) so they marshal as [] instead of
+// null — consumers like the GitHub Actions summary script read .length on
+// scanners/groups/comments directly and a null would throw at runtime.
+func buildEnsembleJSON(comments []model.LlmComment, res ensemble.Result, finals []finding.FinalFinding, arbiterUsage finding.TokenUsage, rows []tokenRow, dur time.Duration) ensembleJSON {
 	if comments == nil {
 		comments = []model.LlmComment{}
 	}
-	env := ensembleJSON{
+	scanners := res.Scanners
+	if scanners == nil {
+		scanners = []ensemble.ScannerResult{}
+	}
+	if finals == nil {
+		finals = []finding.FinalFinding{}
+	}
+	if rows == nil {
+		rows = []tokenRow{}
+	}
+	return ensembleJSON{
 		Status:   "ok",
 		Comments: comments,
 		Warnings: aggregateWarnings(res),
 		Ensemble: &ensembleJSONReport{
-			Scanners:      res.Scanners,
+			Scanners:      scanners,
 			Groups:        finals,
 			DurationMS:    dur.Milliseconds(),
 			ArbiterStatus: arbiterStatus(arbiterUsage, len(finals)),
@@ -234,9 +255,6 @@ func outputEnsembleJSON(comments []model.LlmComment, res ensemble.Result, finals
 			TokenSummary:  rows,
 		},
 	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(env)
 }
 
 func arbiterStatus(usage finding.TokenUsage, finalCount int) string {
