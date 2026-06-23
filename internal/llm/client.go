@@ -279,6 +279,16 @@ type OpenAIClient struct {
 	sdk openai.Client
 }
 
+// ensureTrailingSlash appends "/" to a base URL when missing so that the SDKs'
+// relative-reference resolution preserves the full base path. Empty input is
+// left untouched so the SDK can fall back to its default base URL.
+func ensureTrailingSlash(base string) string {
+	if base == "" || strings.HasSuffix(base, "/") {
+		return base
+	}
+	return base + "/"
+}
+
 // NewOpenAIClient creates a new OpenAI-compatible LLM client.
 func NewOpenAIClient(cfg ClientConfig) *OpenAIClient {
 	if cfg.Timeout <= 0 {
@@ -289,7 +299,12 @@ func NewOpenAIClient(cfg ClientConfig) *OpenAIClient {
 		cfg.URL = baseURL + "/chat/completions"
 	}
 
-	sdkBaseURL := strings.TrimSuffix(strings.TrimRight(cfg.URL, "/"), "/chat/completions")
+	// The SDK appends "chat/completions" to the base URL via RFC 3986 reference
+	// resolution, which drops the last path segment unless the base ends in "/".
+	// Guarantee the trailing slash ourselves so paths like "/v1" are preserved
+	// (otherwise requests go to ".../chat/completions" instead of
+	// ".../v1/chat/completions"), rather than relying on SDK-version behavior.
+	sdkBaseURL := ensureTrailingSlash(strings.TrimSuffix(strings.TrimRight(cfg.URL, "/"), "/chat/completions"))
 
 	return &OpenAIClient{
 		cfg: cfg,
@@ -483,7 +498,9 @@ func NewAnthropicClient(cfg ClientConfig) *AnthropicClient {
 		}
 	}
 
-	sdkBaseURL := strings.TrimSuffix(strings.TrimRight(cfg.URL, "/"), "/v1/messages")
+	// Trailing slash is required so the base path (e.g. a "/anthropic" proxy
+	// prefix) survives the SDK's RFC 3986 resolution of "v1/messages".
+	sdkBaseURL := ensureTrailingSlash(strings.TrimSuffix(strings.TrimRight(cfg.URL, "/"), "/v1/messages"))
 	authHeader, _ := NormalizeAuthHeader(cfg.AuthHeader)
 	if authHeader == "" {
 		authHeader = "authorization"

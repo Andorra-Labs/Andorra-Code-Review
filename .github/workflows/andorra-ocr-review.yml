@@ -480,8 +480,10 @@ jobs:
                 unresolved.map(c => `- **${c.path}** — ${c.body}`).join('\n\n')
               : '';
 
+            const ensembleScanners = data.ensemble?.scanners || [];
+            const ensembleGroups = data.ensemble?.groups || [];
             const summary = data.ensemble
-              ? `**Andorra Review ensemble:** ${data.ensemble.scanners.length} scanners, ${data.ensemble.groups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
+              ? `**Andorra Review ensemble:** ${ensembleScanners.length} scanners, ${ensembleGroups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
               : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
             const body = summary + warningLine + unresolvedSection;
