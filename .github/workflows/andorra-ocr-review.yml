@@ -444,6 +444,15 @@ jobs:
               'Content-Type': 'application/json',
           }
 
+          print('::group::Andorra Review checkpoints')
+          start_ts = time.time()
+
+          def checkpoint(msg):
+              elapsed = time.time() - start_ts
+              print(f'[checkpoint +{elapsed:6.1f}s] {msg}')
+
+          checkpoint('Starting Andorra Review progress monitor')
+
           STATUS_EMOJI = {
               'pending': '⏳',
               'running': '👀',
@@ -501,6 +510,9 @@ jobs:
               '--progress-file', progress_file,
           ]
 
+          safe_cmd = ' '.join(cmd)
+          checkpoint(f'Starting OCR subprocess: {safe_cmd}')
+
           with open(review_file, 'w') as review_f, open(log_file, 'w') as logf:
               proc = subprocess.Popen(cmd, stdout=review_f, stderr=logf)
               last_progress = None
@@ -516,11 +528,22 @@ jobs:
                           with open(progress_file) as f:
                               progress = json.load(f)
                           if progress != last_progress:
+                              scanner_statuses = ', '.join(
+                                  f"{s.get('name')}:{s.get('status')}(iter{s.get('iteration',1)})"
+                                  for s in progress.get('scanners', [])
+                              )
+                              arbiter_status = progress.get('arbiter', {}).get('status', 'pending')
+                              checkpoint(
+                                  f"Progress update — stage={progress.get('stage')}, "
+                                  f"scanners=[{scanner_statuses}], arbiter={arbiter_status}"
+                              )
                               update_comment(render_progress(progress))
                               last_progress = progress
                       except Exception as e:
                           print(f'::debug::progress poll error: {e}', file=sys.stderr)
 
+          checkpoint(f'OCR subprocess finished with exit code {proc.returncode}')
+          print('::endgroup::')
           sys.exit(proc.returncode)
           PY
 
