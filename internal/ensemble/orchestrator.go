@@ -54,15 +54,15 @@ type Orchestrator struct {
 
 // ScannerResult captures the outcome of one scanner for diagnostic reporting.
 type ScannerResult struct {
-	Name     string
-	Provider string
-	Model    string
-	Status   string // "ok" | "error" | "partial"
-	Err      string
-	Findings int
-	Duration time.Duration
-	Tokens   finding.TokenUsage
-	Warnings []agent.AgentWarning
+	Name     string               `json:"name"`
+	Provider string               `json:"provider"`
+	Model    string               `json:"model"`
+	Status   string               `json:"status"` // "ok" | "error" | "partial"
+	Err      string               `json:"err,omitempty"`
+	Findings int                  `json:"findings"`
+	Duration time.Duration        `json:"duration"`
+	Tokens   finding.TokenUsage   `json:"tokens"`
+	Warnings []agent.AgentWarning `json:"warnings,omitempty"`
 }
 
 // Result is the orchestrator's full output for a review run.
