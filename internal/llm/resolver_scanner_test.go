@@ -54,6 +54,55 @@ func TestResolveProviderCustom(t *testing.T) {
 	}
 }
 
+func TestResolveProviderExpandsModelPlaceholder(t *testing.T) {
+	t.Setenv("OCR_SPARK_LLM_MODEL", "Qwen3.6-27B-Text-NVFP4-MTP")
+	path := writeCfg(t, `{
+        "custom_providers": {
+            "Spark": {
+                "api_key": "k",
+                "url": "http://spark.local:9090/v1",
+                "protocol": "openai",
+                "models": ["${env:OCR_SPARK_LLM_MODEL}"]
+            }
+        }
+    }`)
+	ep, err := ResolveProvider(path, "Spark", "${env:OCR_SPARK_LLM_MODEL}")
+	if err != nil {
+		t.Fatalf("ResolveProvider: %v", err)
+	}
+	if ep.Model != "Qwen3.6-27B-Text-NVFP4-MTP" {
+		t.Errorf("Model=%q, want expanded env value", ep.Model)
+	}
+}
+
+func TestResolveProviderExpandsModelPlaceholderStripsSuffix(t *testing.T) {
+	t.Setenv("OCR_SPARK_LLM_MODEL", "Qwen3.6-27B[1m]")
+	path := writeCfg(t, `{
+        "custom_providers": {
+            "Spark": {"api_key":"k","url":"http://spark.local/v1","protocol":"openai","models":["${env:OCR_SPARK_LLM_MODEL}"]}
+        }
+    }`)
+	ep, err := ResolveProvider(path, "Spark", "${env:OCR_SPARK_LLM_MODEL}")
+	if err != nil {
+		t.Fatalf("ResolveProvider: %v", err)
+	}
+	if ep.Model != "Qwen3.6-27B" {
+		t.Errorf("Model=%q, want suffix stripped after env expansion", ep.Model)
+	}
+}
+
+func TestResolveProviderModelPlaceholderUnsetErrors(t *testing.T) {
+	t.Setenv("OCR_SPARK_LLM_MODEL", "")
+	path := writeCfg(t, `{
+        "custom_providers": {
+            "Spark": {"api_key":"k","url":"http://spark.local/v1","protocol":"openai","models":["${env:OCR_SPARK_LLM_MODEL}"]}
+        }
+    }`)
+	if _, err := ResolveProvider(path, "Spark", "${env:OCR_SPARK_LLM_MODEL}"); err == nil {
+		t.Error("expected error when OCR_SPARK_LLM_MODEL is unset")
+	}
+}
+
 func TestResolveProviderUnknown(t *testing.T) {
 	path := writeCfg(t, `{"providers": {"anthropic": {"api_key": "x"}}}`)
 	if _, err := ResolveProvider(path, "openai", "gpt"); err == nil {

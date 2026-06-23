@@ -328,6 +328,10 @@ jobs:
           # naming convention (see internal/configstore/export.go's
           # envForProviderKey) without us caring which providers exist.
           ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
+          # Non-secret model id, supplied via an org/repo variable, so the
+          # config can reference "${env:OCR_SPARK_LLM_MODEL}" instead of
+          # hardcoding the model. vars resolves org-level variables too.
+          OCR_SPARK_LLM_MODEL: ${{ vars.OCR_SPARK_LLM_MODEL }}
           PR_BASE_REF: ${{ steps.pr.outputs.base_ref }}
           PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
