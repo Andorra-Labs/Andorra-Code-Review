@@ -374,6 +374,13 @@ jobs:
           # config can reference "${env:OCR_SPARK_LLM_MODEL}" instead of
           # hardcoding the model. vars resolves org-level variables too.
           OCR_SPARK_LLM_MODEL: ${{ vars.OCR_SPARK_LLM_MODEL }}
+          # Per-request LLM timeout in seconds. Forwarded here (not derived from
+          # the secrets blob like the API keys) so a repo/org variable can raise
+          # it above the 5-minute client default for slow self-hosted models —
+          # otherwise long completions on the Spark endpoint hit "context
+          # deadline exceeded". Unset is fine: the resolver falls back to the
+          # committed .ocr/config.json `llm.timeout`, then the client default.
+          OCR_LLM_TIMEOUT: ${{ vars.OCR_LLM_TIMEOUT }}
           PR_BASE_REF: ${{ steps.pr.outputs.base_ref }}
           PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
@@ -514,6 +521,12 @@ jobs:
               '--from', f"origin/{os.environ['PR_BASE_REF']}",
               '--to', os.environ['PR_HEAD_SHA'],
               '--format', 'json',
+              # Per-file subtask cap in minutes. Raised above the 10-minute
+              # default so a slow file's full review (plan + tool rounds +
+              # filter) isn't cut short once the per-request LLM timeout is
+              # lifted; otherwise this becomes the new "context deadline
+              # exceeded" bottleneck.
+              '--timeout', '25',
               '--debug-trace', '../debug-trace.json',
               '--progress-file', progress_file,
           ]

@@ -11,6 +11,9 @@
   },
   "provider": "Spark",
   "model": "${env:OCR_SPARK_LLM_MODEL}",
+  "llm": {
+    "timeout": 1500
+  },
   "ensemble": {
     "enabled": false,
     "serial": true,
