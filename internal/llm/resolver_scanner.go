@@ -62,11 +62,18 @@ func ResolveProvider(configPath, providerName, modelName string) (ResolvedEndpoi
 		return ResolvedEndpoint{}, fmt.Errorf("provider %q did not produce a valid endpoint", providerName)
 	}
 	ep.Source = "scanner:" + providerName
-	ep.Model = stripModelSuffix(ep.Model)
-	expanded, err := ExpandEnvPlaceholders(ep.Token)
-	if err != nil {
-		return ResolvedEndpoint{}, fmt.Errorf("scanner %q: %w", providerName, err)
+	// Expand ${env:NAME} placeholders in the resolved endpoint so the config can
+	// reference values by environment variable — e.g. a shared
+	// "model": "${env:OCR_SPARK_LLM_MODEL}" across scanners and the arbiter, not
+	// just the api_key. Done before stripModelSuffix so a suffix carried in the
+	// env value is still trimmed.
+	for _, dst := range []*string{&ep.Token, &ep.Model, &ep.URL} {
+		expanded, err := ExpandEnvPlaceholders(*dst)
+		if err != nil {
+			return ResolvedEndpoint{}, fmt.Errorf("scanner %q: %w", providerName, err)
+		}
+		*dst = expanded
 	}
-	ep.Token = expanded
+	ep.Model = stripModelSuffix(ep.Model)
 	return ep, nil
 }
