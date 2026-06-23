@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -49,6 +50,7 @@ type ensembleOptions struct {
 	showProvenance bool
 	showRejected   bool
 	debugTrace     string
+	progressFile   string // --progress-file <path>
 	configPath     string // --config <path>
 }
 
@@ -88,6 +90,8 @@ func splitEnsembleArgs(args []string) (ensembleOptions, []string) {
 			opts.showRejected = true
 		case "--debug-trace":
 			opts.debugTrace = consume()
+		case "--progress-file":
+			opts.progressFile = consume()
 		case "--config":
 			opts.configPath = consume()
 		default:
@@ -374,6 +378,8 @@ func runAndorraReview(args []string) error {
 		return fmt.Errorf("ensemble requires at least 1 scanner after filtering, got %d", len(scanners))
 	}
 
+	progress := NewProgressReporter(eopts.progressFile)
+
 	arbiterModel := ext.Ensemble.Arbiter.Model
 	if eopts.arbiterOverride != "" {
 		arbiterModel = eopts.arbiterOverride
@@ -422,12 +428,23 @@ func runAndorraReview(args []string) error {
 		scannerFanOut = len(scanners)
 	}
 
-	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) ([]model.LlmComment, finding.TokenUsage, []agent.AgentWarning, error) {
+	run := func(ctx context.Context, sep ensemble.ScannerEndpoint) (allComments []model.LlmComment, totalUsage finding.TokenUsage, allWarnings []agent.AgentWarning, err error) {
 		const exhaustiveSafetyCap = 100
 		maxIters := 1
 		if sep.Spec.Exhaustive {
 			maxIters = exhaustiveSafetyCap
 		}
+		finalIteration := 1
+		defer func() {
+			status := "ok"
+			switch {
+			case err != nil && len(allComments) > 0:
+				status = "partial"
+			case err != nil:
+				status = "error"
+			}
+			_ = progress.ScannerComplete(sep.Spec.Name, finalIteration, len(allComments), status)
+		}()
 		fr := &tool.FileReader{
 			RepoDir: repoDir,
 			Mode:    mode,
@@ -441,13 +458,13 @@ func runAndorraReview(args []string) error {
 			scannerTpl.MaxTokens = sep.Spec.MaxTokens
 		}
 
-		var (
-			allComments []model.LlmComment
-			allWarnings []agent.AgentWarning
-			totalUsage  finding.TokenUsage
-		)
 		dedupCfg := dedup.FromConfigStore(ext.Ensemble.Dedup)
+		_ = progress.ScannerRunning(sep.Spec.Name, finalIteration)
 		for iter := 0; iter < maxIters; iter++ {
+			finalIteration = iter + 1
+			if iter > 0 {
+				_ = progress.ScannerRunning(sep.Spec.Name, finalIteration)
+			}
 			client := buildClient(sep.Endpoint, sep.Spec.Bedrock)
 			collector := tool.NewCommentCollector()
 			tools := buildToolRegistry(collector, fr)
@@ -460,7 +477,7 @@ func runAndorraReview(args []string) error {
 			ag := agent.New(agent.Args{
 				RepoDir:               repoDir,
 				From:                  opts.from,
-				To:                    opts.to,
+				To:                  opts.to,
 				Commit:                opts.commit,
 				Template:              scannerTpl,
 				SystemRule:            resolver,
@@ -479,14 +496,26 @@ func runAndorraReview(args []string) error {
 				GitRunner:             gitRunner,
 				PrecomputedDiffs:      parsedDiffs,
 			})
-			comments, err := ag.Run(ctx)
+			comments, runErr := ag.Run(ctx)
 			totalUsage.InputTokens += ag.TotalInputTokens()
 			totalUsage.OutputTokens += ag.TotalOutputTokens()
 			totalUsage.CacheReadTokens += ag.TotalCacheReadTokens()
 			totalUsage.CacheWriteTokens += ag.TotalCacheWriteTokens()
 			allWarnings = append(allWarnings, ag.Warnings()...)
-			if err != nil {
-				return append(allComments, comments...), totalUsage, allWarnings, err
+			if runErr != nil {
+				// Timeouts are treated as non-fatal: keep whatever findings were
+				// produced before the deadline and let the review continue. The
+				// user can address the slow endpoint and trigger a fresh review.
+				if errors.Is(runErr, context.DeadlineExceeded) {
+					fmt.Fprintf(os.Stderr, "[ocr] Scanner %q timed out on iteration %d; using %d finding(s) collected so far.\n", sep.Spec.Name, finalIteration, len(comments))
+					comments = diff.ResolveLineNumbers(comments, ag.Diffs())
+					allComments = append(allComments, comments...)
+					err = nil
+					break
+				}
+				err = runErr
+				allComments = append(allComments, comments...)
+				return
 			}
 			// Resolve line numbers per-iteration so the LlmComment ranges are valid.
 			comments = diff.ResolveLineNumbers(comments, ag.Diffs())
@@ -511,7 +540,7 @@ func runAndorraReview(args []string) error {
 				fmt.Fprintf(stdout.Writer(), "[ocr] Exhaustive scanner %q reached safety cap of %d iterations.\n", sep.Spec.Name, maxIters)
 			}
 		}
-		return allComments, totalUsage, allWarnings, nil
+		return
 	}
 
 	orchConcurrency := scannerFanOut
@@ -542,6 +571,12 @@ func runAndorraReview(args []string) error {
 		telemetry.AnyToAttr("scanner.count", len(scanners)),
 		telemetry.AnyToAttr("arbiter.model", arbiterModel),
 	)
+	scannerNames := make([]string, len(scanners))
+	for i, s := range scanners {
+		scannerNames[i] = s.Spec.Name
+	}
+	_ = progress.Start(scannerNames)
+
 	startTime := time.Now()
 
 	result, err := orch.Execute(ctx)
@@ -567,6 +602,7 @@ func runAndorraReview(args []string) error {
 				fmt.Fprintf(os.Stderr, "[ocr] failed to write debug trace: %v\n", traceErr)
 			}
 		}
+		_ = progress.Fail(err.Error())
 		return fmt.Errorf("ensemble run failed: %w", err)
 	}
 	duration := time.Since(startTime)
@@ -592,20 +628,25 @@ func runAndorraReview(args []string) error {
 		telemetry.AnyToAttr("arbiter.mode", arbiterCfg.Mode),
 		telemetry.AnyToAttr("group.count", len(groups)),
 	)
+	_ = progress.ArbiterRunning()
 	arbiterClient := buildClient(arbiterEp, ext.Ensemble.Arbiter.Bedrock)
 	finals, arbiterUsage := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
+	arbiterStatus := "ok"
 	// An arbiter outage produces all-uncertain verdicts AND zero usage.
 	// Without a loud warning, the default accepted-only filter drops every
 	// finding and the PR looks clean. Surface a synthetic AgentWarning so
 	// stderr / JSON warnings make the outage unmistakable.
 	if arbiterOutage(arbiterUsage, finals) {
+		arbiterStatus = "failed"
 		injectArbiterOutageWarning(result, len(groups))
 	} else if partial, omitted := arbiterPartialOmission(finals); partial {
+		arbiterStatus = "partial"
 		// Partial arbiter responses accept some groups but omit others; those
 		// omitted groups fall back to uncertain and can be silently dropped by
 		// the default accepted-only filter. Warn so the failure is visible.
 		injectArbiterPartialWarning(result, omitted)
 	}
+	_ = progress.ArbiterComplete(arbiterStatus)
 	verdictCounts := map[finding.Verdict]int{}
 	for _, f := range finals {
 		verdictCounts[f.Verdict]++
@@ -637,11 +678,13 @@ func runAndorraReview(args []string) error {
 	tokenRows := buildTokenRows(result, ext.Ensemble.Arbiter, arbiterUsage)
 	EnrichTokenRowsFromSpecs(tokenRows, ext.Ensemble.Scanners)
 	if opts.outputFormat == "json" {
+		_ = progress.Complete(ensembleSummary(result, finals))
 		return outputEnsembleJSON(comments, result, finals, arbiterUsage, tokenRows, duration)
 	}
 	fmt.Fprintln(os.Stderr, ensembleSummary(result, finals))
 	outputTextWithWarnings(comments, aggregateWarnings(result))
 	fmt.Fprintln(os.Stderr, renderTokenGrid(tokenRows))
+	_ = progress.Complete(ensembleSummary(result, finals))
 	if eopts.debugTrace != "" {
 		if err := writeDebugTrace(eopts.debugTrace, result, finals); err != nil {
 			fmt.Fprintf(os.Stderr, "[ocr] failed to write debug trace: %v\n", err)
@@ -761,5 +804,6 @@ func printEnsembleUsage() {
   --verdict-filter <csv>  filter output by verdict (default "accepted_bug"; "all" = every verdict)
   --show-provenance       annotate each finding with the scanners that produced it
   --show-rejected         shorthand for --verdict-filter accepted_bug,rejected_fp
-  --debug-trace <path>    write a JSON trace of scanner/dedup/arbiter decisions`)
+  --debug-trace <path>    write a JSON trace of scanner/dedup/arbiter decisions
+  --progress-file <path>  write a JSON status snapshot for CI polling`)
 }

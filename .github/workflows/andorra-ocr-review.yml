@@ -44,13 +44,13 @@ on:
   issue_comment:
     types: [created]
 
-# Per-PR concurrency: a new push (synchronize) or a fresh @andorra comment
-# cancels any in-flight review against the prior commit, so stale runs
-# can't post review comments after a newer run finishes. Both event types
-# expose a PR number under different paths — `||` picks whichever is set.
+# Global concurrency: only one Andorra Review run is active at a time across the
+# whole repository. This keeps a single shared LLM endpoint from being swamped
+# by simultaneous reviews on multiple PRs. New triggers queue instead of
+# cancelling the in-flight run.
 concurrency:
-  group: andorra-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  group: andorra-review-${{ github.repository }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -78,18 +78,20 @@ jobs:
        contains(github.event.comment.body, '@andorra') &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     steps:
-      - name: React to trigger comment with 👍 (issue_comment only)
+      - name: React to trigger comment with 👀 (issue_comment only)
         if: github.event_name == 'issue_comment'
+        id: eyes
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            await github.rest.reactions.createForIssueComment({
+            const reaction = await github.rest.reactions.createForIssueComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               comment_id: context.payload.comment.id,
-              content: '+1',
+              content: 'eyes',
             });
+            core.setOutput('reaction_id', String(reaction.data.id));
 
       - name: Resolve PR context (head/base SHAs + clone URLs, normalized
               across pull_request_target and issue_comment events)
@@ -133,6 +135,21 @@ jobs:
             echo "::notice::.ocr/config.json not present in base ref — skipping Andorra Review review."
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Remove 👀 reaction when config is missing
+        if: github.event_name == 'issue_comment' && steps.detect.outputs.present == 'false' && steps.eyes.outputs.reaction_id != ''
+        uses: actions/github-script@v7
+        env:
+          REACTION_ID: ${{ steps.eyes.outputs.reaction_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.reactions.deleteForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              reaction_id: parseInt(process.env.REACTION_ID, 10),
+            });
 
       - name: Fetch PR head into pr-head/ via raw git (avoids actions/checkout
               refusing fork-head SHAs under pull_request_target; see
@@ -315,11 +332,32 @@ jobs:
             rm -f pr-head/.gitignore
           fi
 
+      - name: Post initial Andorra Review status comment
+        if: steps.detect.outputs.present == 'true'
+        id: status
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const body = '**Andorra Review in progress** 👀\n\n' +
+              '_Scanning will begin shortly…_';
+            const comment = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+            core.setOutput('comment_id', String(comment.data.id));
+
       - name: Run ensemble review (trusted binary + base config/rules + sandboxed PR data)
         if: steps.detect.outputs.present == 'true'
         id: review
         working-directory: pr-head
         env:
+          STATUS_COMMENT_ID: ${{ steps.status.outputs.comment_id }}
           # Forward the whole secrets blob so the run script can derive
           # OCR_<UPPER_PROVIDER>_API_KEY for each provider referenced in
           # .ocr/config.json. Hardcoding one env entry per provider here
@@ -394,15 +432,156 @@ jobs:
 
           # --debug-trace is written even when every scanner fails, and stderr
           # is captured to a file so failures can be diagnosed from artifacts.
-          opencodereview review \
-            --ensemble \
-            --config ../.ocr/config.json \
-            "${rule_arg[@]}" \
-            --from "origin/${PR_BASE_REF}" \
-            --to "${PR_HEAD_SHA}" \
-            --format json \
-            --debug-trace ../debug-trace.json \
-            > ../review.json 2> ../review.log
+          # --progress-file lets the workflow update a live status comment.
+          python3 - "$STATUS_COMMENT_ID" <<'PY'
+          import json, os, subprocess, sys, time, urllib.request, urllib.error
+
+          comment_id = sys.argv[1]
+          token = os.environ['GITHUB_TOKEN']
+          repo = os.environ['GITHUB_REPOSITORY']
+          progress_file = '../progress.json'
+          review_file = '../review.json'
+          log_file = '../review.log'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json',
+          }
+
+          print('::group::Andorra Review checkpoints')
+          start_ts = time.time()
+
+          def checkpoint(msg):
+              elapsed = time.time() - start_ts
+              print(f'[checkpoint +{elapsed:6.1f}s] {msg}')
+
+          checkpoint('Starting Andorra Review progress monitor')
+
+          STATUS_EMOJI = {
+              'pending': '⏳',
+              'running': '👀',
+              'ok': '✅',
+              'complete': '✅',
+              'error': '❌',
+              'failed': '❌',
+              'partial': '⚠️',
+          }
+
+          def update_comment(body):
+              data = json.dumps({'body': body}).encode()
+              req = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/issues/comments/{comment_id}',
+                  data=data, headers=headers, method='PATCH')
+              try:
+                  urllib.request.urlopen(req, timeout=30)
+              except urllib.error.HTTPError as e:
+                  print(f'::warning::progress comment update failed: {e.code} {e.reason}', file=sys.stderr)
+
+          def render_progress(progress):
+              lines = ['**Andorra Review in progress** 👀', '']
+              lines.append('### Scanners')
+              for s in progress.get('scanners', []):
+                  status = s.get('status', 'pending')
+                  emoji = STATUS_EMOJI.get(status, '❓')
+                  iter_text = f" (iteration {s.get('iteration', 1)})" if status == 'running' else ''
+                  findings_text = f" — {s.get('findings', 0)} finding(s)" if status in ('ok', 'complete', 'partial') else ''
+                  lines.append(f"- {emoji} **{s.get('name', 'unknown')}**{iter_text}{findings_text}")
+              arbiter = progress.get('arbiter', {})
+              a_status = arbiter.get('status', 'pending')
+              a_emoji = STATUS_EMOJI.get(a_status, '⏳')
+              lines.append('')
+              lines.append('### Arbiter')
+              lines.append(f"- {a_emoji} **Arbiter**")
+              message = progress.get('message')
+              if message:
+                  lines.append('')
+                  lines.append(f"_{message}_")
+              return '\n'.join(lines)
+
+          rule_arg = []
+          if os.environ.get('TRUSTED_RULE_PATH'):
+              rule_arg = ['--rule', os.environ['TRUSTED_RULE_PATH']]
+
+          cmd = [
+              'opencodereview', 'review',
+              '--ensemble',
+              '--config', '../.ocr/config.json',
+              *rule_arg,
+              '--from', f"origin/{os.environ['PR_BASE_REF']}",
+              '--to', os.environ['PR_HEAD_SHA'],
+              '--format', 'json',
+              '--debug-trace', '../debug-trace.json',
+              '--progress-file', progress_file,
+          ]
+
+          safe_cmd = ' '.join(cmd)
+          checkpoint(f'Starting OCR subprocess: {safe_cmd}')
+
+          with open(review_file, 'w') as review_f, open(log_file, 'w') as logf:
+              proc = subprocess.Popen(cmd, stdout=review_f, stderr=logf)
+              last_progress = None
+              poll_interval = 15
+              while True:
+                  try:
+                      proc.wait(timeout=poll_interval)
+                      break
+                  except subprocess.TimeoutExpired:
+                      pass
+                  if os.path.exists(progress_file):
+                      try:
+                          with open(progress_file) as f:
+                              progress = json.load(f)
+                          if progress != last_progress:
+                              scanner_statuses = ', '.join(
+                                  f"{s.get('name')}:{s.get('status')}(iter{s.get('iteration',1)})"
+                                  for s in progress.get('scanners', [])
+                              )
+                              arbiter_status = progress.get('arbiter', {}).get('status', 'pending')
+                              checkpoint(
+                                  f"Progress update — stage={progress.get('stage')}, "
+                                  f"scanners=[{scanner_statuses}], arbiter={arbiter_status}"
+                              )
+                              update_comment(render_progress(progress))
+                              last_progress = progress
+                      except Exception as e:
+                          print(f'::debug::progress poll error: {e}', file=sys.stderr)
+
+          checkpoint(f'OCR subprocess finished with exit code {proc.returncode}')
+          print('::endgroup::')
+          sys.exit(proc.returncode)
+          PY
+
+      - name: Update status comment on failure
+        if: ${{ failure() && steps.detect.outputs.present == 'true' && steps.status.outputs.comment_id != '' }}
+        uses: actions/github-script@v7
+        env:
+          STATUS_COMMENT_ID: ${{ steps.status.outputs.comment_id }}
+          REACTION_ID: ${{ steps.eyes.outputs.reaction_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const statusCommentId = parseInt(process.env.STATUS_COMMENT_ID, 10);
+            let body = '**Andorra Review failed** ❌\n\n_The review could not be completed. Check the workflow logs and uploaded artifacts for details._';
+            if (fs.existsSync('review.log')) {
+              const logTail = fs.readFileSync('review.log', 'utf8').split('\n').slice(-20).join('\n');
+              body += '\n\n<details>\n<summary>Last log lines</summary>\n\n```\n' + logTail + '\n```\n</details>';
+            }
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: statusCommentId,
+              body,
+            });
+            const reactionId = process.env.REACTION_ID;
+            if (reactionId) {
+              await github.rest.reactions.deleteForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                reaction_id: parseInt(reactionId, 10),
+              });
+            }
 
       - name: Upload Andorra Review debug artifacts
         if: ${{ !cancelled() && steps.detect.outputs.present == 'true' }}
@@ -421,6 +600,8 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          STATUS_COMMENT_ID: ${{ steps.status.outputs.comment_id }}
+          REACTION_ID: ${{ steps.eyes.outputs.reaction_id }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -490,7 +671,55 @@ jobs:
               ? `**Andorra Review ensemble:** ${ensembleScanners.length} scanners, ${ensembleGroups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
               : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
-            const body = summary + warningLine + unresolvedSection;
+            // Format per-model token spend from the CLI's JSON output.
+            const fmtNum = (n) => (typeof n === 'number' && !Number.isNaN(n) ? n.toLocaleString() : '—');
+            const tokenRows = (data.ensemble?.token_summary || []);
+            let tokenSection = '';
+            if (tokenRows.length > 0) {
+              const anyCache = tokenRows.some(r => (r.tokens?.cache_read_tokens || 0) > 0 || (r.tokens?.cache_write_tokens || 0) > 0);
+              const anyCost = tokenRows.some(r => r.cost_known);
+              const anyLocal = tokenRows.some(r => r.is_local);
+              const headers = ['Model', 'Input', 'Output', anyCache ? 'Cache' : null, 'Total', anyCost || anyLocal ? 'Cost (USD)' : null].filter(Boolean);
+              const renderCost = (r) => {
+                if (r.is_local) return '(local)';
+                if (!r.cost_known) return '—';
+                return `$${r.cost_usd.toFixed(4)}`;
+              };
+              const renderCache = (r) => {
+                const parts = [];
+                if ((r.tokens?.cache_read_tokens || 0) > 0) parts.push(`read ${fmtNum(r.tokens.cache_read_tokens)}`);
+                if ((r.tokens?.cache_write_tokens || 0) > 0) parts.push(`write ${fmtNum(r.tokens.cache_write_tokens)}`);
+                return parts.join(', ') || '—';
+              };
+              const totalTokens = tokenRows.reduce((acc, r) => acc + ((r.tokens?.input_tokens || 0) + (r.tokens?.output_tokens || 0)), 0);
+              const totalCost = tokenRows.reduce((acc, r) => acc + (r.cost_known ? r.cost_usd : 0), 0);
+              const rows = tokenRows.map(r => {
+                const cells = [
+                  `**${r.label}**${r.model && r.model !== r.label ? `<br><sub>${r.model}</sub>` : ''}`,
+                  fmtNum(r.tokens?.input_tokens),
+                  fmtNum(r.tokens?.output_tokens),
+                  anyCache ? renderCache(r) : null,
+                  fmtNum((r.tokens?.input_tokens || 0) + (r.tokens?.output_tokens || 0)),
+                  anyCost || anyLocal ? renderCost(r) : null,
+                ].filter(c => c !== null);
+                return `| ${cells.join(' | ')} |`;
+              });
+              const separator = `| ${headers.map(() => '---').join(' | ')} |`;
+              const totalRowCells = [
+                '**Total**',
+                '',
+                '',
+                anyCache ? '' : null,
+                `**${fmtNum(totalTokens)}**`,
+                anyCost || anyLocal ? `**$${totalCost.toFixed(4)}**` : null,
+              ].filter(c => c !== null);
+              const totalRow = `| ${totalRowCells.join(' | ')} |`;
+              tokenSection = '\n\n<details>\n<summary>Token usage by model</summary>\n\n' +
+                `| ${headers.join(' | ')} |\n${separator}\n` +
+                rows.join('\n') + '\n' + totalRow + '\n</details>';
+            }
+
+            const body = summary + warningLine + unresolvedSection + tokenSection;
 
             if (inline.length === 0) {
               await github.rest.issues.createComment({
@@ -499,25 +728,46 @@ jobs:
                 issue_number: prNumber,
                 body: body + (unresolved.length ? '' : '\n\n_No accepted-bug findings on this diff._')
               });
-              return;
+            } else {
+              try {
+                await github.rest.pulls.createReview({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  commit_id: headSha,
+                  event: 'COMMENT',
+                  body: body,
+                  comments: inline,
+                });
+              } catch (err) {
+                core.warning(`createReview failed: ${err.message}. Falling back to issue comment.`);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: body + '\n\n' + inline.map(c =>
+                    `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n')
+                });
+              }
             }
-            try {
-              await github.rest.pulls.createReview({
+
+            // Replace the live status comment with the final summary and drop
+            // the 👀 reaction from the trigger comment.
+            const statusCommentId = process.env.STATUS_COMMENT_ID;
+            if (statusCommentId) {
+              await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: prNumber,
-                commit_id: headSha,
-                event: 'COMMENT',
-                body: body,
-                comments: inline,
+                comment_id: parseInt(statusCommentId, 10),
+                body: '**Andorra Review complete** ✅\n\n' + body,
               });
-            } catch (err) {
-              core.warning(`createReview failed: ${err.message}. Falling back to issue comment.`);
-              await github.rest.issues.createComment({
+            }
+            const reactionId = process.env.REACTION_ID;
+            if (reactionId) {
+              await github.rest.reactions.deleteForIssueComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: prNumber,
-                body: body + '\n\n' + inline.map(c =>
-                  `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n')
+                comment_id: context.payload.comment.id,
+                reaction_id: parseInt(reactionId, 10),
               });
             }
