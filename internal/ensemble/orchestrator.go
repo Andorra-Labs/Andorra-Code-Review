@@ -188,9 +188,12 @@ func (o *Orchestrator) activeScanners() []ScannerEndpoint {
 	return out
 }
 
+// endpointModel returns the model to display/report for a scanner. It prefers
+// the resolved endpoint model (which has any ${env:...} placeholder expanded and
+// is what actually gets sent to the LLM) over the raw spec model from config.
 func endpointModel(sep ScannerEndpoint) string {
-	if sep.Spec.Model != "" {
-		return sep.Spec.Model
+	if sep.Endpoint.Model != "" {
+		return sep.Endpoint.Model
 	}
-	return sep.Endpoint.Model
+	return sep.Spec.Model
 }

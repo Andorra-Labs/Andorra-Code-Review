@@ -711,8 +711,17 @@ jobs:
 
             const ensembleScanners = data.ensemble?.scanners || [];
             const ensembleGroups = data.ensemble?.groups || [];
+            // Break down the arbiter's verdicts so the summary reports how many
+            // findings were found and how many it accepted vs rejected.
+            const verdicts = { accepted_bug: 0, rejected_fp: 0, uncertain: 0, style_only: 0 };
+            for (const g of ensembleGroups) {
+              if (Object.prototype.hasOwnProperty.call(verdicts, g.verdict)) verdicts[g.verdict]++;
+            }
             const summary = data.ensemble
-              ? `**Andorra Review ensemble:** ${ensembleScanners.length} scanners, ${ensembleGroups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
+              ? `**Andorra Review ensemble:** ${ensembleScanners.length} scanner(s) · ${ensembleGroups.length} finding(s) → ` +
+                `✅ ${verdicts.accepted_bug} accepted · 🚫 ${verdicts.rejected_fp} rejected · ` +
+                `❓ ${verdicts.uncertain} uncertain · 🎨 ${verdicts.style_only} style-only` +
+                `${unresolved.length ? ` · ${unresolved.length} unresolved-line` : ''}.`
               : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
             // Format per-model token spend from the CLI's JSON output.
@@ -764,15 +773,13 @@ jobs:
             }
 
             const body = summary + warningLine + unresolvedSection + tokenSection;
+            let finalBody = '**Andorra Review complete** ✅\n\n' + body +
+              (inline.length === 0 && unresolved.length === 0 ? '\n\n_No accepted-bug findings on this diff._' : '');
 
-            if (inline.length === 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body: body + (unresolved.length ? '' : '\n\n_No accepted-bug findings on this diff._')
-              });
-            } else {
+            // Inline findings (if any) go on the diff as a review. The summary
+            // itself is finalized in the existing status comment below, so we
+            // don't post a second standalone summary comment (no double-post).
+            if (inline.length > 0) {
               try {
                 await github.rest.pulls.createReview({
                   owner: context.repo.owner,
@@ -780,30 +787,33 @@ jobs:
                   pull_number: prNumber,
                   commit_id: headSha,
                   event: 'COMMENT',
-                  body: body,
+                  body: `**Andorra Review:** ${inline.length} inline finding(s) — see the summary comment.`,
                   comments: inline,
                 });
               } catch (err) {
-                core.warning(`createReview failed: ${err.message}. Falling back to issue comment.`);
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: prNumber,
-                  body: body + '\n\n' + inline.map(c =>
-                    `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n')
-                });
+                core.warning(`createReview failed: ${err.message}. Folding inline findings into the summary comment.`);
+                finalBody += '\n\n' + inline.map(c =>
+                  `**${c.path}:${c.line}** — ${c.body}`).join('\n\n---\n\n');
               }
             }
 
-            // Replace the live status comment with the final summary and drop
-            // the 👀 reaction from the trigger comment.
+            // Finalize the live status (dynamic) comment with the summary
+            // instead of creating a new one. Only fall back to a fresh comment
+            // if the status comment is somehow missing.
             const statusCommentId = process.env.STATUS_COMMENT_ID;
             if (statusCommentId) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: parseInt(statusCommentId, 10),
-                body: '**Andorra Review complete** ✅\n\n' + body,
+                body: finalBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: finalBody,
               });
             }
             const reactionId = process.env.REACTION_ID;
