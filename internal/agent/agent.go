@@ -921,6 +921,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 	toolReqCount := a.args.Template.MaxToolRequestTimes
 	const maxConsecutiveEmptyRounds = 3
 	consecutiveEmptyRounds := 0
+	sawAnyToolCall := false
 
 	for toolReqCount > 0 {
 		select {
@@ -972,6 +973,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			}
 			continue
 		}
+		sawAnyToolCall = true
 
 		var results []tool.ToolCallResult
 		taskCompleted := false
@@ -1009,6 +1011,8 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			consecutiveEmptyRounds++
 			if consecutiveEmptyRounds >= maxConsecutiveEmptyRounds {
 				fmt.Fprintf(stdout.Writer(), "[ocr] Too many empty retries for %s, stopping.\n", newPath)
+				a.recordWarning("no_valid_tool_results", newPath,
+					fmt.Sprintf("scanner stopped after %d tool-call rounds with no usable result; any findings for this file were not captured", maxConsecutiveEmptyRounds))
 				break
 			}
 			fmt.Fprintf(stdout.Writer(), "[ocr] No valid tool results for %s, retrying...\n", newPath)
@@ -1025,6 +1029,17 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 
 	if toolReqCount <= 0 {
 		fmt.Fprintf(stdout.Writer(), "[ocr] Max tool requests reached for %s.\n", newPath)
+		if !sawAnyToolCall {
+			// The model answered every round but never emitted a parseable
+			// tool call, so nothing reached the comment collector. Without
+			// this warning the scanner reports zero findings and the review
+			// looks clean — the silent-drop failure mode. Surface it loudly.
+			a.recordWarning("no_tool_calls", newPath,
+				"scanner produced a response but never emitted a parseable tool call; its review of this file was not captured as findings (likely a tool-call format mismatch)")
+		} else {
+			a.recordWarning("incomplete_review", newPath,
+				"scanner hit the max tool-request limit without signaling task_done; its review of this file may be incomplete")
+		}
 	}
 
 	return nil
