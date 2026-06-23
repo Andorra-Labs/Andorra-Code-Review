@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ResolvedEndpoint holds the resolved LLM endpoint configuration.
@@ -18,6 +20,11 @@ type ResolvedEndpoint struct {
 	AuthHeader string         // Anthropic auth header: "x-api-key" or "authorization"
 	Source     string         // human-readable config source label
 	ExtraBody  map[string]any // vendor-specific request body fields
+	// Timeout is the per-request LLM timeout. Zero means "use the client
+	// default" (5 minutes). Slow self-hosted models can raise this via the
+	// `llm.timeout` config field, the OCR_LLM_TIMEOUT env var, or a per-scanner
+	// override.
+	Timeout time.Duration
 }
 
 // Environment variable names for OCR-specific configuration.
@@ -27,7 +34,25 @@ const (
 	envOCRLLMModel      = "OCR_LLM_MODEL"
 	envOCRLLMAuthHeader = "OCR_LLM_AUTH_HEADER"
 	envOCRUseAnthropic  = "OCR_USE_ANTHROPIC"
+	envOCRLLMTimeout    = "OCR_LLM_TIMEOUT"
 )
+
+// llmTimeout resolves the per-request LLM timeout from a config value (in
+// seconds) and the OCR_LLM_TIMEOUT env override (also seconds, and taking
+// precedence so CI can bump it without editing the trusted config). It returns
+// 0 when neither is set, signalling the client to apply its built-in default.
+func llmTimeout(configSeconds int) time.Duration {
+	seconds := configSeconds
+	if v := strings.TrimSpace(os.Getenv(envOCRLLMTimeout)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			seconds = n
+		}
+	}
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 // Environment variable names from Claude Code configuration.
 const (
@@ -111,7 +136,7 @@ func tryOCREnv(modelOverride string) (ResolvedEndpoint, bool, error) {
 		}
 	}
 
-	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: protocol, AuthHeader: authHeader, Source: "OCR environment"}, true, nil
+	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: protocol, AuthHeader: authHeader, Source: "OCR environment", Timeout: llmTimeout(0)}, true, nil
 }
 
 // llmFileConfig represents the llm section in config.json.
@@ -122,6 +147,7 @@ type llmFileConfig struct {
 	Model        string         `json:"model,omitempty"`
 	UseAnthropic *bool          `json:"use_anthropic,omitempty"` // pointer to distinguish unset from false
 	ExtraBody    map[string]any `json:"extra_body,omitempty"`
+	Timeout      int            `json:"timeout,omitempty"` // per-request LLM timeout in seconds; 0 = client default
 }
 
 // providerEntryConfig represents a single provider entry in config.json.
@@ -286,6 +312,7 @@ func tryProviderConfig(cfg configFile, modelOverride string) (ResolvedEndpoint, 
 		AuthHeader: authHeader,
 		Source:     "provider:" + cfg.Provider,
 		ExtraBody:  extraBody,
+		Timeout:    llmTimeout(cfg.Llm.Timeout),
 	}, true, nil
 }
 
@@ -321,7 +348,7 @@ func tryLegacyLlmConfig(cfg configFile, modelOverride string) (ResolvedEndpoint,
 		}
 	}
 
-	return ResolvedEndpoint{URL: cfg.Llm.URL, Token: cfg.Llm.AuthToken, Model: model, Protocol: protocol, AuthHeader: authHeader, Source: "OCR config file", ExtraBody: cfg.Llm.ExtraBody}, true, nil
+	return ResolvedEndpoint{URL: cfg.Llm.URL, Token: cfg.Llm.AuthToken, Model: model, Protocol: protocol, AuthHeader: authHeader, Source: "OCR config file", ExtraBody: cfg.Llm.ExtraBody, Timeout: llmTimeout(cfg.Llm.Timeout)}, true, nil
 }
 
 // tryCCEnv reads Claude Code environment variables.
@@ -339,7 +366,7 @@ func tryCCEnv(modelOverride string) (ResolvedEndpoint, bool, error) {
 	url := ensureMessagesSuffix(baseURL)
 
 	// Claude Code environment tokens are OAuth/Bearer-style credentials.
-	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic", AuthHeader: "authorization", Source: "Claude Code environment"}, true, nil
+	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic", AuthHeader: "authorization", Source: "Claude Code environment", Timeout: llmTimeout(0)}, true, nil
 }
 
 // tryShellRC parses ~/.zshrc and ~/.bashrc for ANTHROPIC_* exports.
@@ -425,7 +452,7 @@ func parseShellRC(path, modelOverride string) (ResolvedEndpoint, bool, error) {
 	url := ensureMessagesSuffix(baseURL)
 
 	// Claude Code shell rc tokens are OAuth/Bearer-style credentials.
-	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic", AuthHeader: "authorization", Source: "Shell rc file"}, true, nil
+	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic", AuthHeader: "authorization", Source: "Shell rc file", Timeout: llmTimeout(0)}, true, nil
 }
 
 func defaultAuthHeader(protocol string) string {

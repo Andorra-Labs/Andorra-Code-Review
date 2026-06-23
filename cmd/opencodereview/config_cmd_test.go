@@ -22,6 +22,28 @@ func TestSetConfigValueAuthHeaderRejectsCustomHeader(t *testing.T) {
 	}
 }
 
+func TestSetConfigValueTimeout(t *testing.T) {
+	cfg := &Config{}
+
+	if err := setConfigValue(cfg, "llm.timeout", "900"); err != nil {
+		t.Fatalf("setConfigValue: %v", err)
+	}
+	if cfg.Llm.Timeout != 900 {
+		t.Errorf("Timeout = %d, want 900", cfg.Llm.Timeout)
+	}
+}
+
+func TestSetConfigValueTimeoutRejectsNonInteger(t *testing.T) {
+	cfg := &Config{}
+
+	if err := setConfigValue(cfg, "llm.timeout", "abc"); err == nil {
+		t.Fatal("expected error for non-integer llm.timeout, got nil")
+	}
+	if err := setConfigValue(cfg, "llm.timeout", "-5"); err == nil {
+		t.Fatal("expected error for negative llm.timeout, got nil")
+	}
+}
+
 func TestSetConfigValueProvider(t *testing.T) {
 	cfg := &Config{}
 

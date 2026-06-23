@@ -117,7 +117,7 @@ func buildClient(ep llm.ResolvedEndpoint, bedrock bool) llm.LLMClient {
 			URL:     ep.URL,
 			APIKey:  ep.Token,
 			Model:   ep.Model,
-			Timeout: 0, // BedrockClient applies its own default
+			Timeout: ep.Timeout, // 0 -> BedrockClient applies its own default
 		})
 	}
 	return llm.NewLLMClient(ep)
@@ -692,6 +692,11 @@ func resolveScanners(cfgPath string, specs []configstore.ScannerSpec, subset []s
 		}
 		if err != nil {
 			return nil, fmt.Errorf("scanner %q: %w", s.Name, err)
+		}
+		// Per-scanner timeout overrides the global llm.timeout / OCR_LLM_TIMEOUT
+		// resolved above for this scanner only.
+		if s.Timeout > 0 {
+			ep.Timeout = time.Duration(s.Timeout) * time.Second
 		}
 		out = append(out, ensemble.ScannerEndpoint{Spec: s, Endpoint: ep})
 	}
