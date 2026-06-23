@@ -54,15 +54,23 @@ type Orchestrator struct {
 
 // ScannerResult captures the outcome of one scanner for diagnostic reporting.
 type ScannerResult struct {
-	Name     string
-	Provider string
-	Model    string
-	Status   string // "ok" | "error" | "partial"
-	Err      string
-	Findings int
-	Duration time.Duration
-	Tokens   finding.TokenUsage
-	Warnings []agent.AgentWarning
+	Name     string               `json:"name"`
+	Provider string               `json:"provider"`
+	Model    string               `json:"model"`
+	Status   string               `json:"status"` // "ok" | "error" | "partial"
+	Err      string               `json:"err,omitempty"`
+	Findings int                  `json:"findings"`
+	Duration time.Duration        `json:"duration"`
+	Tokens   finding.TokenUsage   `json:"tokens"`
+	Warnings []agent.AgentWarning `json:"warnings,omitempty"`
+	// Raw is this scanner's complete raw output — every candidate finding it
+	// emitted, before dedup/grouping and before the arbiter's verdict. It is
+	// carried into the JSON envelope so the PR summary can show each scanner's
+	// full output in a nested dropdown, which matters when the arbiter fails
+	// and every finding is marked uncertain (the accepted-only view is empty
+	// but the scanner still found things). omitempty keeps it out of the JSON
+	// when a scanner produced nothing.
+	Raw []finding.RawFinding `json:"raw,omitempty"`
 }
 
 // Result is the orchestrator's full output for a review run.
@@ -138,6 +146,7 @@ func (o *Orchestrator) Execute(ctx context.Context) (Result, error) {
 				Duration: dur,
 				Tokens:   tokens,
 				Warnings: tagged,
+				Raw:      raws,
 			}
 			switch {
 			case err == nil:

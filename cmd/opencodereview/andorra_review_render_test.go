@@ -53,6 +53,54 @@ func TestBuildEnsembleJSON_NilSlicesMarshalAsArrays(t *testing.T) {
 	}
 }
 
+// TestBuildEnsembleJSON_IncludesScannerRawOutput guards that each scanner's
+// complete raw output is carried into the JSON envelope under scanners[].raw,
+// so the GitHub Actions summary can render a per-scanner "full output" dropdown
+// even when the arbiter fails and the accepted-only view is empty.
+func TestBuildEnsembleJSON_IncludesScannerRawOutput(t *testing.T) {
+	res := ensemble.Result{
+		Scanners: []ensemble.ScannerResult{
+			{
+				Name:     "spark",
+				Status:   "partial",
+				Findings: 1,
+				Raw: []finding.RawFinding{
+					{Path: "main.go", StartLine: 10, EndLine: 12, Title: "nil map write", Detail: "writes to a nil map"},
+				},
+			},
+		},
+	}
+
+	env := buildEnsembleJSON(nil, res, nil, finding.TokenUsage{}, nil, time.Second)
+	out, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded struct {
+		Ensemble struct {
+			Scanners []struct {
+				Raw []struct {
+					Path  string `json:"path"`
+					Title string `json:"title"`
+				} `json:"raw"`
+			} `json:"scanners"`
+		} `json:"ensemble"`
+	}
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v\njson: %s", err, out)
+	}
+	if len(decoded.Ensemble.Scanners) != 1 {
+		t.Fatalf("got %d scanners, want 1\njson: %s", len(decoded.Ensemble.Scanners), out)
+	}
+	if len(decoded.Ensemble.Scanners[0].Raw) != 1 {
+		t.Fatalf("scanner raw output missing from envelope\njson: %s", out)
+	}
+	if got := decoded.Ensemble.Scanners[0].Raw[0].Title; got != "nil map write" {
+		t.Errorf("raw finding title = %q, want %q", got, "nil map write")
+	}
+}
+
 // TestBuildTokenRows_UsesResolvedModels guards against the token grid showing a
 // raw "${env:...}" placeholder instead of the model actually used.
 func TestBuildTokenRows_UsesResolvedModels(t *testing.T) {
