@@ -513,6 +513,7 @@ Config file: `~/.opencodereview/config.json`
 | `llm.auth_header` | string | Anthropic only: `x-api-key` \| `authorization` |
 | `llm.model` | string | `claude-opus-4-6` |
 | `llm.use_anthropic` | boolean | `true` \| `false` |
+| `llm.timeout` | integer | Per-request LLM timeout in seconds (default: `300`). Raise for slow self-hosted models. |
 | `language` | string | Any language name, e.g. `English`, `Chinese` (default: `English`) |
 | `telemetry.enabled` | boolean | `true` \| `false` |
 | `telemetry.exporter` | string | `console` \| `otlp` |
@@ -530,6 +531,7 @@ Environment variables take precedence over the config file.
 | `OCR_LLM_AUTH_HEADER` | Anthropic auth header (`x-api-key` or `authorization`) |
 | `OCR_LLM_MODEL` | Model name |
 | `OCR_USE_ANTHROPIC` | `true` = Anthropic, `false` = OpenAI |
+| `OCR_LLM_TIMEOUT` | Per-request LLM timeout in seconds (overrides `llm.timeout`) |
 
 
 ## Telemetry

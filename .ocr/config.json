@@ -5,12 +5,12 @@
       "url": "http://spark.tail93d320.ts.net:9090/v1",
       "api_key": "${env:OCR_SPARK_API_KEY}",
       "models": [
-        "Qwen3.6-27B-Text-NVFP4-MTP"
+        "${env:OCR_SPARK_LLM_MODEL}"
       ]
     }
   },
   "provider": "Spark",
-  "model": "Qwen3.6-27B-Text-NVFP4-MTP",
+  "model": "${env:OCR_SPARK_LLM_MODEL}",
   "ensemble": {
     "enabled": false,
     "serial": true,
@@ -18,13 +18,13 @@
       {
         "name": "spark",
         "provider": "Spark",
-        "model": "Qwen3.6-27B-Text-NVFP4-MTP",
+        "model": "${env:OCR_SPARK_LLM_MODEL}",
         "exhaustive": true
       }
     ],
     "arbiter": {
       "provider": "Spark",
-      "model": "Qwen3.6-27B-Text-NVFP4-MTP"
+      "model": "${env:OCR_SPARK_LLM_MODEL}"
     }
   }
 }

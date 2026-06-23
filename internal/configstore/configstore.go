@@ -71,6 +71,10 @@ type ScannerSpec struct {
 	Local             bool    `json:"local,omitempty"`
 	CostPerMInputUSD  float64 `json:"cost_per_m_input_usd,omitempty"`
 	CostPerMOutputUSD float64 `json:"cost_per_m_output_usd,omitempty"`
+	// Timeout overrides the per-request LLM timeout (in seconds) for this
+	// scanner only, taking precedence over the global llm.timeout config and
+	// the OCR_LLM_TIMEOUT env var. 0 = inherit the global/default.
+	Timeout int `json:"timeout,omitempty"`
 }
 
 // ArbiterSpec configures the arbiter pass that classifies grouped findings.
