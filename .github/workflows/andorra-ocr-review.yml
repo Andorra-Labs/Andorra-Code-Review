@@ -486,7 +486,55 @@ jobs:
               ? `**Andorra Review ensemble:** ${ensembleScanners.length} scanners, ${ensembleGroups.length} groups → ${inline.length} accepted bug(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line finding(s)` : ''}.`
               : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
-            const body = summary + warningLine + unresolvedSection;
+            // Format per-model token spend from the CLI's JSON output.
+            const fmtNum = (n) => (typeof n === 'number' && !Number.isNaN(n) ? n.toLocaleString() : '—');
+            const tokenRows = (data.ensemble?.token_summary || []);
+            let tokenSection = '';
+            if (tokenRows.length > 0) {
+              const anyCache = tokenRows.some(r => (r.tokens?.cache_read_tokens || 0) > 0 || (r.tokens?.cache_write_tokens || 0) > 0);
+              const anyCost = tokenRows.some(r => r.cost_known);
+              const anyLocal = tokenRows.some(r => r.is_local);
+              const headers = ['Model', 'Input', 'Output', anyCache ? 'Cache' : null, 'Total', anyCost || anyLocal ? 'Cost (USD)' : null].filter(Boolean);
+              const renderCost = (r) => {
+                if (r.is_local) return '(local)';
+                if (!r.cost_known) return '—';
+                return `$${r.cost_usd.toFixed(4)}`;
+              };
+              const renderCache = (r) => {
+                const parts = [];
+                if ((r.tokens?.cache_read_tokens || 0) > 0) parts.push(`read ${fmtNum(r.tokens.cache_read_tokens)}`);
+                if ((r.tokens?.cache_write_tokens || 0) > 0) parts.push(`write ${fmtNum(r.tokens.cache_write_tokens)}`);
+                return parts.join(', ') || '—';
+              };
+              const totalTokens = tokenRows.reduce((acc, r) => acc + ((r.tokens?.input_tokens || 0) + (r.tokens?.output_tokens || 0)), 0);
+              const totalCost = tokenRows.reduce((acc, r) => acc + (r.cost_known ? r.cost_usd : 0), 0);
+              const rows = tokenRows.map(r => {
+                const cells = [
+                  `**${r.label}**${r.model && r.model !== r.label ? `<br><sub>${r.model}</sub>` : ''}`,
+                  fmtNum(r.tokens?.input_tokens),
+                  fmtNum(r.tokens?.output_tokens),
+                  anyCache ? renderCache(r) : null,
+                  fmtNum((r.tokens?.input_tokens || 0) + (r.tokens?.output_tokens || 0)),
+                  anyCost || anyLocal ? renderCost(r) : null,
+                ].filter(c => c !== null);
+                return `| ${cells.join(' | ')} |`;
+              });
+              const separator = `| ${headers.map(() => '---').join(' | ')} |`;
+              const totalRowCells = [
+                '**Total**',
+                '',
+                '',
+                anyCache ? '' : null,
+                `**${fmtNum(totalTokens)}**`,
+                anyCost || anyLocal ? `**$${totalCost.toFixed(4)}**` : null,
+              ].filter(c => c !== null);
+              const totalRow = `| ${totalRowCells.join(' | ')} |`;
+              tokenSection = '\n\n<details>\n<summary>Token usage by model</summary>\n\n' +
+                `| ${headers.join(' | ')} |\n${separator}\n` +
+                rows.join('\n') + '\n' + totalRow + '\n</details>';
+            }
+
+            const body = summary + warningLine + unresolvedSection + tokenSection;
 
             if (inline.length === 0) {
               await github.rest.issues.createComment({
