@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -502,6 +503,16 @@ func runAndorraReview(args []string) error {
 			totalUsage.CacheWriteTokens += ag.TotalCacheWriteTokens()
 			allWarnings = append(allWarnings, ag.Warnings()...)
 			if runErr != nil {
+				// Timeouts are treated as non-fatal: keep whatever findings were
+				// produced before the deadline and let the review continue. The
+				// user can address the slow endpoint and trigger a fresh review.
+				if errors.Is(runErr, context.DeadlineExceeded) {
+					fmt.Fprintf(os.Stderr, "[ocr] Scanner %q timed out on iteration %d; using %d finding(s) collected so far.\n", sep.Spec.Name, finalIteration, len(comments))
+					comments = diff.ResolveLineNumbers(comments, ag.Diffs())
+					allComments = append(allComments, comments...)
+					err = nil
+					break
+				}
 				err = runErr
 				allComments = append(allComments, comments...)
 				return
