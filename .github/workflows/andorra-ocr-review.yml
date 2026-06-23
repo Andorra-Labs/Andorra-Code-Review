@@ -358,6 +358,10 @@ jobs:
         working-directory: pr-head
         env:
           STATUS_COMMENT_ID: ${{ steps.status.outputs.comment_id }}
+          # The progress-monitor wrapper (run: below) PATCHes the status
+          # comment via the REST API, so it needs the token in its env.
+          # GITHUB_TOKEN is not injected automatically — it must be mapped.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Forward the whole secrets blob so the run script can derive
           # OCR_<UPPER_PROVIDER>_API_KEY for each provider referenced in
           # .ocr/config.json. Hardcoding one env entry per provider here
