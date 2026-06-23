@@ -52,3 +52,23 @@ func TestBuildEnsembleJSON_NilSlicesMarshalAsArrays(t *testing.T) {
 		t.Errorf("ensemble.token_summary serialized as null, want []\njson: %s", out)
 	}
 }
+
+// TestBuildTokenRows_UsesResolvedModels guards against the token grid showing a
+// raw "${env:...}" placeholder instead of the model actually used.
+func TestBuildTokenRows_UsesResolvedModels(t *testing.T) {
+	res := ensemble.Result{
+		Scanners: []ensemble.ScannerResult{
+			{Name: "spark", Model: "Qwen3.6-35B-A3B-NVFP4", Tokens: finding.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+		},
+	}
+	rows := buildTokenRows(res, nil, "Qwen3.6-35B-A3B-NVFP4", finding.TokenUsage{})
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (scanner + arbiter)", len(rows))
+	}
+	if rows[0].Model != "Qwen3.6-35B-A3B-NVFP4" {
+		t.Errorf("scanner row Model = %q, want resolved model", rows[0].Model)
+	}
+	if rows[len(rows)-1].Model != "Qwen3.6-35B-A3B-NVFP4" {
+		t.Errorf("arbiter row Model = %q, want resolved model", rows[len(rows)-1].Model)
+	}
+}

@@ -214,3 +214,21 @@ func TestExecuteConcurrencyBound(t *testing.T) {
 		t.Errorf("peak inflight=%d, want <= 2", peak)
 	}
 }
+
+func TestEndpointModelPrefersResolvedModel(t *testing.T) {
+	// The resolved endpoint model (placeholders expanded, what's actually sent
+	// to the LLM) must win over the raw config spec model.
+	sep := ScannerEndpoint{
+		Spec:     configstore.ScannerSpec{Model: "${env:OCR_SPARK_LLM_MODEL}"},
+		Endpoint: llm.ResolvedEndpoint{Model: "Qwen3.6-35B-A3B-NVFP4"},
+	}
+	if got := endpointModel(sep); got != "Qwen3.6-35B-A3B-NVFP4" {
+		t.Errorf("endpointModel = %q, want resolved model %q", got, "Qwen3.6-35B-A3B-NVFP4")
+	}
+
+	// Falls back to the spec model when the endpoint carries none.
+	sepNoEp := ScannerEndpoint{Spec: configstore.ScannerSpec{Model: "spec-only"}}
+	if got := endpointModel(sepNoEp); got != "spec-only" {
+		t.Errorf("endpointModel fallback = %q, want %q", got, "spec-only")
+	}
+}
