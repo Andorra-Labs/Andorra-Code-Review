@@ -725,7 +725,11 @@ jobs:
               : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
             // Per-scanner breakdown so users can see which scanners contributed
-            // findings and which failed or timed out.
+            // findings and which failed or timed out. Inside it, each scanner
+            // gets a nested dropdown with its complete raw output (every
+            // candidate it emitted, before dedup/arbiter), so a reviewer can see
+            // what a scanner actually found even when the arbiter fails and the
+            // accepted-only view above is empty.
             let scannerSection = '';
             if (ensembleScanners.length > 0) {
               const statusEmoji = { ok: '✅', partial: '⚠️', error: '❌' };
@@ -735,9 +739,61 @@ jobs:
                 const errSub = s.err ? `<br><sub>${s.err}</sub>` : '';
                 return `| ${emoji} **${s.name}**${modelSub} | ${s.status} | ${s.findings || 0} | ${s.provider || '—'}${errSub} |`;
               });
+
+              // Render each scanner's raw output as a nested dropdown. GitHub
+              // caps an issue-comment body at 65536 chars and rejects the PATCH
+              // otherwise, so we render under a char budget and truncate long
+              // fields / overflow findings, pointing at the debug-trace.json
+              // artifact (which always has the complete, untruncated output).
+              const FIELD_CAP = 1500;       // per detail/code-block field
+              let rawBudget = 45000;        // shared across all nested blocks
+              const truncate = (str, n) => {
+                const t = (str == null ? '' : String(str));
+                return t.length > n
+                  ? t.slice(0, n) + `\n…(${t.length - n} more char(s) — see debug-trace.json artifact)`
+                  : t;
+              };
+              // Fence code in quadruple backticks so embedded ``` in scanner
+              // output can't break out of the block.
+              const fence = (code) => '````\n' + truncate(code, FIELD_CAP) + '\n````';
+              const renderRawFinding = (f, n) => {
+                const loc = f.path
+                  ? `\`${f.path}:${f.start_line || 0}${f.end_line && f.end_line !== f.start_line ? '-' + f.end_line : ''}\``
+                  : '_(no location)_';
+                const meta = [
+                  f.severity ? String(f.severity).toUpperCase() : null,
+                  (typeof f.confidence === 'number' && f.confidence > 0) ? `confidence ${f.confidence.toFixed(2)}` : null,
+                ].filter(Boolean).join(' · ');
+                const parts = [`**${n}.** ${loc}${meta ? ' · ' + meta : ''}`];
+                if (f.explicit_title && f.title) parts.push(`**${f.title}**`);
+                if (f.detail) parts.push('', truncate(f.detail, FIELD_CAP));
+                if (f.existing_code) parts.push('', '_existing:_', fence(f.existing_code));
+                if (f.suggestion_code) parts.push('', '_suggested:_', fence(f.suggestion_code));
+                return parts.join('\n');
+              };
+              const rawBlockFor = (s) => {
+                const raw = Array.isArray(s.raw) ? s.raw : [];
+                if (raw.length === 0) return '';
+                let block = `\n\n<details>\n<summary>${s.name} — full output (${raw.length} finding(s))</summary>\n\n`;
+                let shown = 0;
+                for (let i = 0; i < raw.length; i++) {
+                  const piece = renderRawFinding(raw[i], i + 1) + (i < raw.length - 1 ? '\n\n---\n' : '\n');
+                  if (piece.length > rawBudget) {
+                    block += `\n_Output truncated — ${raw.length - shown} more finding(s) omitted to fit GitHub's comment limit. See the debug-trace.json artifact for each scanner's complete output._\n`;
+                    break;
+                  }
+                  block += piece;
+                  rawBudget -= piece.length;
+                  shown++;
+                }
+                return block + '</details>';
+              };
+
               scannerSection = '\n\n<details>\n<summary>Scanner breakdown</summary>\n\n' +
                 '| Scanner | Status | Findings | Provider |\n| --- | --- | --- | --- |\n' +
-                scannerRows.join('\n') + '\n</details>';
+                scannerRows.join('\n') +
+                ensembleScanners.map(rawBlockFor).join('') +
+                '\n</details>';
             }
 
             // Format per-model token spend from the CLI's JSON output.
