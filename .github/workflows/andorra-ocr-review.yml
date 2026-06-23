@@ -737,6 +737,24 @@ jobs:
                 `${unresolved.length ? ` · ${unresolved.length} unresolved-line` : ''}.`
               : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
+            // Wall-clock elapsed for the run, surfaced so a reviewer can see at
+            // a glance how long scanning took (and spot runs that burned the
+            // per-request / per-file timeout before dying). duration_ms is the
+            // total review timer; scanners[].duration (used in the breakdown
+            // below) is per-scanner, in nanoseconds.
+            const fmtDuration = (ms) => {
+              if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return null;
+              const totalSec = Math.round(ms / 1000);
+              if (totalSec < 60) return `${totalSec}s`;
+              const m = Math.floor(totalSec / 60);
+              const s = totalSec % 60;
+              if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
+              const h = Math.floor(m / 60);
+              return (m % 60) ? `${h}h ${m % 60}m` : `${h}h`;
+            };
+            const elapsedStr = fmtDuration(data.ensemble?.duration_ms);
+            const elapsedLine = elapsedStr ? `\n\n⏱️ **Elapsed:** ${elapsedStr}` : '';
+
             // Per-scanner breakdown so users can see which scanners contributed
             // findings and which failed or timed out. Inside it, each scanner
             // gets a nested dropdown with its complete raw output (every
@@ -750,7 +768,9 @@ jobs:
                 const emoji = statusEmoji[s.status] || '❓';
                 const modelSub = s.model && s.model !== s.name ? `<br><sub>${s.model}</sub>` : '';
                 const errSub = s.err ? `<br><sub>${s.err}</sub>` : '';
-                return `| ${emoji} **${s.name}**${modelSub} | ${s.status} | ${s.findings || 0} | ${s.provider || '—'}${errSub} |`;
+                // s.duration is a Go time.Duration → nanoseconds; convert to ms.
+                const elapsed = fmtDuration((s.duration || 0) / 1e6) || '—';
+                return `| ${emoji} **${s.name}**${modelSub} | ${s.status} | ${s.findings || 0} | ${elapsed} | ${s.provider || '—'}${errSub} |`;
               });
 
               // Render each scanner's raw output as a nested dropdown. GitHub
@@ -803,7 +823,7 @@ jobs:
               };
 
               scannerSection = '\n\n<details>\n<summary>Scanner breakdown</summary>\n\n' +
-                '| Scanner | Status | Findings | Provider |\n| --- | --- | --- | --- |\n' +
+                '| Scanner | Status | Findings | Elapsed | Provider |\n| --- | --- | --- | --- | --- |\n' +
                 scannerRows.join('\n') +
                 ensembleScanners.map(rawBlockFor).join('') +
                 '\n</details>';
@@ -857,7 +877,7 @@ jobs:
                 rows.join('\n') + '\n' + totalRow + '\n</details>';
             }
 
-            const body = summary + warningLine + scannerSection + unresolvedSection + tokenSection;
+            const body = summary + elapsedLine + warningLine + scannerSection + unresolvedSection + tokenSection;
             let finalBody = '**Andorra Review complete** ✅\n\n' + body +
               (inline.length === 0 && unresolved.length === 0 ? '\n\n_No accepted-bug findings on this diff._' : '');
 

@@ -90,10 +90,12 @@ async function testNestedRawDropdownRenders() {
     comments: [],
     warnings: [{ type: "arbiter_failed", message: "arbiter call failed" }],
     ensemble: {
+      duration_ms: 704000, // 11m 44s total
       scanners: [
         {
           name: "spark", status: "partial", findings: 2, provider: "Spark",
           model: "DeepSeek-V4-Flash", err: "all 2 file review(s) failed",
+          duration: 90000000000, // 90s in nanoseconds (Go time.Duration)
           raw: [
             {
               path: "main.go", start_line: 10, end_line: 12, title: "nil map write",
@@ -110,6 +112,9 @@ async function testNestedRawDropdownRenders() {
     },
   });
 
+  assert.match(body, /⏱️ \*\*Elapsed:\*\* 11m 44s/, "total elapsed line missing");
+  assert.match(body, /\| Scanner \| Status \| Findings \| Elapsed \| Provider \|/, "breakdown table missing Elapsed column");
+  assert.match(body, /1m 30s/, "per-scanner elapsed missing from breakdown row");
   assert.match(body, /<summary>Scanner breakdown<\/summary>/, "outer breakdown dropdown missing");
   assert.match(body, /<summary>spark — full output \(2 finding\(s\)\)<\/summary>/, "nested per-scanner dropdown missing");
   assert.match(body, /nil map write/, "raw finding title missing");
