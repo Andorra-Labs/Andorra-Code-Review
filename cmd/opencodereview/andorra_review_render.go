@@ -284,7 +284,10 @@ type tokenRow struct {
 // result and the arbiter's reported usage. Cost is derived from the spec's
 // CostPerM*USD fields; Local spec rows are tagged so the renderer can show
 // "(local)" instead of a dollar value.
-func buildTokenRows(res ensemble.Result, arbiterSpec *configstore.ArbiterSpec, arbiterUsage finding.TokenUsage) []tokenRow {
+// arbiterModel is the resolved arbiter endpoint model (placeholders expanded);
+// it is preferred over arbiterSpec.Model so the token grid shows the model that
+// was actually used rather than a raw "${env:...}" config value.
+func buildTokenRows(res ensemble.Result, arbiterSpec *configstore.ArbiterSpec, arbiterModel string, arbiterUsage finding.TokenUsage) []tokenRow {
 	rows := make([]tokenRow, 0, len(res.Scanners)+1)
 
 	// Scanner rows. ScannerResult doesn't carry the spec, so we re-attach
@@ -300,8 +303,11 @@ func buildTokenRows(res ensemble.Result, arbiterSpec *configstore.ArbiterSpec, a
 
 	// Arbiter row (always last, even when usage is zero, so the table is uniform).
 	arbiterRow := tokenRow{Label: "arbiter", Tokens: arbiterUsage}
+	if arbiterModel == "" && arbiterSpec != nil {
+		arbiterModel = arbiterSpec.Model
+	}
+	arbiterRow.Model = arbiterModel
 	if arbiterSpec != nil {
-		arbiterRow.Model = arbiterSpec.Model
 		arbiterRow.IsLocal = arbiterSpec.Local
 		arbiterRow.IsBedrock = arbiterSpec.Bedrock
 		if arbiterSpec.CostPerMInputUSD > 0 || arbiterSpec.CostPerMOutputUSD > 0 {

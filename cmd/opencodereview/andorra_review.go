@@ -675,7 +675,7 @@ func runAndorraReview(args []string) error {
 		unsilence()
 		unsilence = nil
 	}
-	tokenRows := buildTokenRows(result, ext.Ensemble.Arbiter, arbiterUsage)
+	tokenRows := buildTokenRows(result, ext.Ensemble.Arbiter, arbiterEp.Model, arbiterUsage)
 	EnrichTokenRowsFromSpecs(tokenRows, ext.Ensemble.Scanners)
 	if opts.outputFormat == "json" {
 		_ = progress.Complete(ensembleSummary(result, finals))
