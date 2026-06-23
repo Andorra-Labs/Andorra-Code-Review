@@ -113,6 +113,7 @@ type LlmConfig struct {
 	Model        string         `json:"model,omitempty"`
 	UseAnthropic *bool          `json:"use_anthropic,omitempty"` // nil = default true; false = OpenAI protocol
 	ExtraBody    map[string]any `json:"extra_body,omitempty"`
+	Timeout      int            `json:"timeout,omitempty"` // per-request LLM timeout in seconds; 0 = client default
 }
 
 // TelemetryConfig holds telemetry-specific settings.
@@ -222,6 +223,12 @@ func setConfigValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid boolean for llm.use_anthropic: %w", err)
 		}
 		cfg.Llm.UseAnthropic = &b
+	case "llm.timeout", "llm.Timeout":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			return fmt.Errorf("invalid llm.timeout %q: expected a non-negative integer (seconds)", value)
+		}
+		cfg.Llm.Timeout = n
 	case "language", "Language":
 		cfg.Language = value
 	case "telemetry.enabled", "telemetry.Enabled":
@@ -251,7 +258,7 @@ func setConfigValue(cfg *Config, key, value string) error {
 		}
 		cfg.Llm.ExtraBody = m
 	default:
-		return fmt.Errorf("unknown config key: %s\nSupported keys: provider, model, providers.<name>.<field>, custom_providers.<name>.<field>, llm.url, llm.auth_token, llm.auth_header, llm.model, llm.use_anthropic, llm.extra_body, language, telemetry.enabled, telemetry.exporter, telemetry.otlp_endpoint, telemetry.content_logging\nProvider fields: api_key, url, protocol, model, models, auth_header, extra_body", key)
+		return fmt.Errorf("unknown config key: %s\nSupported keys: provider, model, providers.<name>.<field>, custom_providers.<name>.<field>, llm.url, llm.auth_token, llm.auth_header, llm.model, llm.use_anthropic, llm.timeout, llm.extra_body, language, telemetry.enabled, telemetry.exporter, telemetry.otlp_endpoint, telemetry.content_logging\nProvider fields: api_key, url, protocol, model, models, auth_header, extra_body", key)
 	}
 	return nil
 }

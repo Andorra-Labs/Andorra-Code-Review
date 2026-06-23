@@ -198,6 +198,7 @@ func NewLLMClient(ep ResolvedEndpoint) LLMClient {
 		Model:      ep.Model,
 		AuthHeader: ep.AuthHeader,
 		ExtraBody:  ep.ExtraBody,
+		Timeout:    ep.Timeout, // 0 -> constructor applies the 5-minute default
 	}
 	if ep.Protocol == "anthropic" {
 		return NewAnthropicClient(cfg)
