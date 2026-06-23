@@ -724,6 +724,22 @@ jobs:
                 `${unresolved.length ? ` · ${unresolved.length} unresolved-line` : ''}.`
               : `**Andorra Review:** ${inline.length} comment(s)${unresolved.length ? ` + ${unresolved.length} unresolved-line` : ''}.`;
 
+            // Per-scanner breakdown so users can see which scanners contributed
+            // findings and which failed or timed out.
+            let scannerSection = '';
+            if (ensembleScanners.length > 0) {
+              const statusEmoji = { ok: '✅', partial: '⚠️', error: '❌' };
+              const scannerRows = ensembleScanners.map(s => {
+                const emoji = statusEmoji[s.status] || '❓';
+                const modelSub = s.model && s.model !== s.name ? `<br><sub>${s.model}</sub>` : '';
+                const errSub = s.err ? `<br><sub>${s.err}</sub>` : '';
+                return `| ${emoji} **${s.name}**${modelSub} | ${s.status} | ${s.findings || 0} | ${s.provider || '—'}${errSub} |`;
+              });
+              scannerSection = '\n\n<details>\n<summary>Scanner breakdown</summary>\n\n' +
+                '| Scanner | Status | Findings | Provider |\n| --- | --- | --- | --- |\n' +
+                scannerRows.join('\n') + '\n</details>';
+            }
+
             // Format per-model token spend from the CLI's JSON output.
             const fmtNum = (n) => (typeof n === 'number' && !Number.isNaN(n) ? n.toLocaleString() : '—');
             const tokenRows = (data.ensemble?.token_summary || []);
@@ -772,7 +788,7 @@ jobs:
                 rows.join('\n') + '\n' + totalRow + '\n</details>';
             }
 
-            const body = summary + warningLine + unresolvedSection + tokenSection;
+            const body = summary + warningLine + scannerSection + unresolvedSection + tokenSection;
             let finalBody = '**Andorra Review complete** ✅\n\n' + body +
               (inline.length === 0 && unresolved.length === 0 ? '\n\n_No accepted-bug findings on this diff._' : '');
 
