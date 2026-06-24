@@ -46,12 +46,12 @@ type ensembleOptions struct {
 	forceLegacy     bool
 	scannerSubset   []string // --scanners opus,gpt
 	arbiterOverride string   // --arbiter-model X
-	verdictFilter  []string // --verdict-filter accepted,uncertain
-	showProvenance bool
-	showRejected   bool
-	debugTrace     string
-	progressFile   string // --progress-file <path>
-	configPath     string // --config <path>
+	verdictFilter   []string // --verdict-filter accepted,uncertain
+	showProvenance  bool
+	showRejected    bool
+	debugTrace      string
+	progressFile    string // --progress-file <path>
+	configPath      string // --config <path>
 }
 
 // splitEnsembleArgs separates ensemble-only flags from the rest. Returned
@@ -216,8 +216,10 @@ func isRepoLocalConfigPath(path, repoDir string) bool {
 }
 
 // resolveAndorraConfigPath implements the fork's config lookup order:
-//   explicit --config flag → <gitRoot(repoDir)>/.ocr/config.json
-//   → <cwd>/.ocr/config.json → ~/.opencodereview/config.json
+//
+//	explicit --config flag → <gitRoot(repoDir)>/.ocr/config.json
+//	→ <cwd>/.ocr/config.json → ~/.opencodereview/config.json
+//
 // Repo-local beats user-level so CI deterministically uses the committed file.
 // The gitRoot lookup means `ocr review --repo path/to/subdir` still finds
 // the config committed at the repository root.
@@ -477,7 +479,7 @@ func runAndorraReview(args []string) error {
 			ag := agent.New(agent.Args{
 				RepoDir:               repoDir,
 				From:                  opts.from,
-				To:                  opts.to,
+				To:                    opts.to,
 				Commit:                opts.commit,
 				Template:              scannerTpl,
 				SystemRule:            resolver,
@@ -598,7 +600,7 @@ func runAndorraReview(args []string) error {
 			}
 		}
 		if eopts.debugTrace != "" {
-			if traceErr := writeDebugTrace(eopts.debugTrace, result, nil); traceErr != nil {
+			if traceErr := writeDebugTrace(eopts.debugTrace, result, nil, nil); traceErr != nil {
 				fmt.Fprintf(os.Stderr, "[ocr] failed to write debug trace: %v\n", traceErr)
 			}
 		}
@@ -630,15 +632,22 @@ func runAndorraReview(args []string) error {
 	)
 	_ = progress.ArbiterRunning()
 	arbiterClient := buildClient(arbiterEp, ext.Ensemble.Arbiter.Bedrock)
-	finals, arbiterUsage := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
+	finals, arbiterUsage, arbiterErr := arbiter.Decide(ctx, arbiterClient, arbiterCfg, groups, diffsByPath)
+	// Surface the arbiter's underlying error to stderr (captured in review.log)
+	// regardless of outcome, so the cause is recoverable from CI artifacts even
+	// when output is JSON.
+	if arbiterErr != nil {
+		fmt.Fprintf(os.Stderr, "[ocr] arbiter error: %v\n", arbiterErr)
+	}
 	arbiterStatus := "ok"
 	// An arbiter outage produces all-uncertain verdicts AND zero usage.
 	// Without a loud warning, the default accepted-only filter drops every
-	// finding and the PR looks clean. Surface a synthetic AgentWarning so
-	// stderr / JSON warnings make the outage unmistakable.
+	// finding and the PR looks clean. Surface a synthetic AgentWarning — with
+	// the underlying cause from arbiterErr when available — so stderr / JSON
+	// warnings make the outage and its reason unmistakable.
 	if arbiterOutage(arbiterUsage, finals) {
 		arbiterStatus = "failed"
-		injectArbiterOutageWarning(result, len(groups))
+		injectArbiterOutageWarning(result, len(groups), arbiterErr)
 	} else if partial, omitted := arbiterPartialOmission(finals); partial {
 		arbiterStatus = "partial"
 		// Partial arbiter responses accept some groups but omit others; those
@@ -677,6 +686,14 @@ func runAndorraReview(args []string) error {
 	}
 	tokenRows := buildTokenRows(result, ext.Ensemble.Arbiter, arbiterEp.Model, arbiterUsage)
 	EnrichTokenRowsFromSpecs(tokenRows, ext.Ensemble.Scanners)
+	// Write the debug trace before branching on output format: the JSON path
+	// returns early, so leaving this after the branch meant successful JSON
+	// runs (e.g. CI) never produced the trace artifact at all.
+	if eopts.debugTrace != "" {
+		if err := writeDebugTrace(eopts.debugTrace, result, finals, arbiterErr); err != nil {
+			fmt.Fprintf(os.Stderr, "[ocr] failed to write debug trace: %v\n", err)
+		}
+	}
 	if opts.outputFormat == "json" {
 		_ = progress.Complete(ensembleSummary(result, finals))
 		return outputEnsembleJSON(comments, result, finals, arbiterUsage, tokenRows, duration)
@@ -685,11 +702,6 @@ func runAndorraReview(args []string) error {
 	outputTextWithWarnings(comments, aggregateWarnings(result))
 	fmt.Fprintln(os.Stderr, renderTokenGrid(tokenRows))
 	_ = progress.Complete(ensembleSummary(result, finals))
-	if eopts.debugTrace != "" {
-		if err := writeDebugTrace(eopts.debugTrace, result, finals); err != nil {
-			fmt.Fprintf(os.Stderr, "[ocr] failed to write debug trace: %v\n", err)
-		}
-	}
 	return nil
 }
 
