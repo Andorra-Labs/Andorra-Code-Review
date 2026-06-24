@@ -287,3 +287,89 @@ func TestFromConfigStoreFillsDefaults(t *testing.T) {
 		t.Errorf("model not from arg: %q", cfg.Model)
 	}
 }
+
+// toolUnsupportedClient errors on any request carrying tools (mimicking an
+// endpoint that 500s on function calling) but answers a plain request with a
+// fixed JSON response. Used to exercise the arbiter's JSON fallback.
+type toolUnsupportedClient struct {
+	calls    int
+	jsonResp *llm.ChatResponse
+}
+
+func (c *toolUnsupportedClient) CompletionsWithCtx(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	c.calls++
+	if len(req.Tools) > 0 {
+		return nil, errors.New("500 Internal Server Error: model does not support tools")
+	}
+	return c.jsonResp, nil
+}
+
+func mkJSONResp(content string) *llm.ChatResponse {
+	return &llm.ChatResponse{
+		Choices: []llm.Choice{{
+			Message: llm.ResponseMessage{Content: &content},
+		}},
+	}
+}
+
+func TestDecideFallsBackToJSONWhenToolsUnsupported(t *testing.T) {
+	groups := []finding.Finding{
+		mkGroup("g-0", "a.go", "real bug", 1, 1),
+		mkGroup("g-1", "a.go", "fake bug", 5, 5),
+	}
+	client := &toolUnsupportedClient{
+		jsonResp: mkJSONResp("```json\n{\"verdicts\":[" +
+			"{\"group_id\":\"g-0\",\"verdict\":\"accepted_bug\",\"confidence\":0.9}," +
+			"{\"group_id\":\"g-1\",\"verdict\":\"rejected_fp\",\"reason\":\"constant condition\"}]}\n```"),
+	}
+	out, _, err := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	if err != nil {
+		t.Fatalf("expected success via JSON fallback, got %v", err)
+	}
+	if client.calls != 2 {
+		t.Errorf("calls=%d, want 2 (tool attempt + json fallback)", client.calls)
+	}
+	if len(out) != 2 {
+		t.Fatalf("len=%d", len(out))
+	}
+	if out[0].Verdict != finding.VerdictAccepted || out[1].Verdict != finding.VerdictRejected {
+		t.Errorf("verdicts wrong: %+v %+v", out[0].Verdict, out[1].Verdict)
+	}
+	if out[0].Confidence != 0.9 {
+		t.Errorf("conf[0]=%f", out[0].Confidence)
+	}
+	if out[1].VerdictReason != "constant condition" {
+		t.Errorf("reason[1]=%q", out[1].VerdictReason)
+	}
+}
+
+func TestDecideToolsThenJSONBothFail(t *testing.T) {
+	groups := []finding.Finding{mkGroup("g-0", "a.go", "x", 1, 1)}
+	// fakeClient errors regardless of tools, so both attempts fail.
+	client := &fakeClient{err: errors.New("boom")}
+	out, _, err := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	if err == nil {
+		t.Fatal("expected error when both tool and json attempts fail")
+	}
+	if client.calls != 2 {
+		t.Errorf("calls=%d, want 2 (tool attempt + json fallback)", client.calls)
+	}
+	if out[0].Verdict != finding.VerdictUncertain {
+		t.Errorf("verdict=%s, want uncertain", out[0].Verdict)
+	}
+}
+
+func TestExtractJSONObject(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"verdicts":[]}`, `{"verdicts":[]}`},
+		{"```json\n{\"a\":1}\n```", `{"a":1}`},
+		{"Here is the result:\n{\"a\":1}\nThanks!", `{"a":1}`},
+		{"no json here", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := extractJSONObject(c.in); got != c.want {
+			t.Errorf("extractJSONObject(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}

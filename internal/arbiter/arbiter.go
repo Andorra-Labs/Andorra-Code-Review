@@ -2,9 +2,10 @@
 // into FinalFindings (accepted_bug, rejected_fp, uncertain, style_only).
 //
 // Default mode is per_file: one LLM call per file with all that file's groups
-// in a single request. per_group mode emits one LLM call per group. Both modes
-// use a tool-call schema so the response is structured and the SDK enforces
-// shape.
+// in a single request. per_group mode emits one LLM call per group. The arbiter
+// prefers a tool-call schema so the response is structured and the SDK enforces
+// shape, but falls back to parsing a JSON object from the message content when
+// the endpoint does not support tool/function calling.
 package arbiter
 
 import (
@@ -126,19 +127,46 @@ type rawVerdict struct {
 	Confidence float64 `json:"confidence"`
 }
 
-// callArbiter returns the per-group verdict/reason/confidence maps plus the
-// token usage reported by the LLM for this single call. Empty maps signal
-// failure; applyVerdicts then assigns VerdictUncertain. The returned error,
-// when non-nil, explains *why* no verdicts came back (LLM error, no tool call,
-// unparseable arguments) so the caller can surface it instead of treating
-// every failure as an opaque outage.
+// callArbiter classifies one batch of groups. It first tries tool/function
+// calling (schema-enforced, preferred). If that path fails, it retries once
+// without tools, asking for the verdict as a plain JSON object parsed from the
+// message content. The fallback exists because many self-hosted or
+// openai-compatible endpoints (e.g. vLLM served without a tool-call parser)
+// either 500 on a `tools` request or ignore it and answer in prose; the scanner
+// pass works on those endpoints because it never uses tools, so the arbiter
+// should not be the lone component that hard-requires them.
+//
+// Token usage from both attempts is accumulated. The returned error, when
+// non-nil, explains why no verdicts came back — naming both the tool-call and
+// JSON attempts — so the caller can surface it instead of treating every
+// failure as an opaque outage.
 func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diff string) (map[string]finding.Verdict, map[string]string, map[string]float64, finding.TokenUsage, error) {
+	verdicts, reasons, confs, usage, err := callArbiterOnce(ctx, client, cfg, groups, diff, true)
+	if err == nil {
+		return verdicts, reasons, confs, usage, nil
+	}
+	// Fallback: retry without tools and parse JSON from the content. Carry the
+	// first attempt's usage forward so token accounting reflects both calls.
+	v2, r2, c2, u2, err2 := callArbiterOnce(ctx, client, cfg, groups, diff, false)
+	u2 = usage.Add(u2)
+	if err2 == nil {
+		return v2, r2, c2, u2, nil
+	}
+	return v2, r2, c2, u2, fmt.Errorf("tool-call path: %v; json fallback: %w", err, err2)
+}
+
+// callArbiterOnce performs a single arbiter request. When useTools is true the
+// request carries the arbiter_verdict tool and verdicts are read from the tool
+// call; otherwise the request asks for a JSON object and verdicts are parsed
+// from the message content. Empty result maps with a non-nil error signal
+// failure; applyVerdicts then assigns VerdictUncertain.
+func callArbiterOnce(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diff string, useTools bool) (map[string]finding.Verdict, map[string]string, map[string]float64, finding.TokenUsage, error) {
 	verdicts := map[string]finding.Verdict{}
 	reasons := map[string]string{}
 	confs := map[string]float64{}
 	var usage finding.TokenUsage
 
-	prompt, err := buildPrompt(groups, diff)
+	prompt, err := buildPrompt(groups, diff, useTools)
 	if err != nil {
 		return verdicts, reasons, confs, usage, fmt.Errorf("build prompt: %w", err)
 	}
@@ -155,10 +183,13 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
 		},
-		Tools:       []llm.ToolDef{verdictToolDef},
 		Temperature: &temp,
 		MaxTokens:   cfg.MaxTokens,
 	}
+	if useTools {
+		req.Tools = []llm.ToolDef{verdictToolDef}
+	}
+
 	resp, err := client.CompletionsWithCtx(ctx, req)
 	if err != nil {
 		return verdicts, reasons, confs, usage, fmt.Errorf("LLM call failed: %w", err)
@@ -174,10 +205,43 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 			CacheWriteTokens: resp.Usage.CacheWriteTokens,
 		}
 	}
+
+	var raws []rawVerdict
+	if useTools {
+		raws, err = extractToolVerdicts(resp)
+	} else {
+		raws, err = extractJSONVerdicts(resp)
+	}
+	if err != nil {
+		return verdicts, reasons, confs, usage, err
+	}
+
+	for _, v := range raws {
+		parsed := finding.ParseVerdict(v.Verdict)
+		if parsed == "" {
+			continue
+		}
+		verdicts[v.GroupID] = parsed
+		if v.Reason != "" {
+			reasons[v.GroupID] = v.Reason
+		}
+		if v.Confidence > 0 {
+			confs[v.GroupID] = clamp(v.Confidence, 0, 1)
+		}
+	}
+	if len(verdicts) == 0 {
+		return verdicts, reasons, confs, usage, errors.New("response contained no usable verdicts")
+	}
+	return verdicts, reasons, confs, usage, nil
+}
+
+// extractToolVerdicts reads rawVerdicts from the arbiter_verdict tool call.
+func extractToolVerdicts(resp *llm.ChatResponse) ([]rawVerdict, error) {
 	calls := resp.ToolCalls()
 	if len(calls) == 0 {
-		return verdicts, reasons, confs, usage, errors.New("response contained no tool call (model may have replied in prose)")
+		return nil, errors.New("response contained no tool call (model may have replied in prose)")
 	}
+	var out []rawVerdict
 	var parseErr error
 	sawVerdictTool := false
 	for _, call := range calls {
@@ -192,33 +256,50 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 			parseErr = fmt.Errorf("could not parse arbiter_verdict arguments: %w", err)
 			continue
 		}
-		for _, v := range args.Verdicts {
-			parsed := finding.ParseVerdict(v.Verdict)
-			if parsed == "" {
-				continue
-			}
-			verdicts[v.GroupID] = parsed
-			if v.Reason != "" {
-				reasons[v.GroupID] = v.Reason
-			}
-			if v.Confidence > 0 {
-				confs[v.GroupID] = clamp(v.Confidence, 0, 1)
-			}
-		}
+		out = append(out, args.Verdicts...)
 	}
-	// Any parsed verdict means a usable response; report success even if some
-	// entries were malformed.
-	if len(verdicts) > 0 {
-		return verdicts, reasons, confs, usage, nil
+	if len(out) > 0 {
+		return out, nil
 	}
 	switch {
 	case parseErr != nil:
-		return verdicts, reasons, confs, usage, parseErr
+		return nil, parseErr
 	case !sawVerdictTool:
-		return verdicts, reasons, confs, usage, errors.New("response made tool call(s) but none named arbiter_verdict")
+		return nil, errors.New("response made tool call(s) but none named arbiter_verdict")
 	default:
-		return verdicts, reasons, confs, usage, errors.New("arbiter_verdict call contained no usable verdicts")
+		return nil, errors.New("arbiter_verdict call contained no verdicts")
 	}
+}
+
+// extractJSONVerdicts reads rawVerdicts from a JSON object embedded in the
+// message content, tolerating markdown fences and surrounding prose.
+func extractJSONVerdicts(resp *llm.ChatResponse) ([]rawVerdict, error) {
+	obj := extractJSONObject(resp.Content())
+	if obj == "" {
+		return nil, errors.New("response content had no JSON object (model may have replied in prose)")
+	}
+	var args struct {
+		Verdicts []rawVerdict `json:"verdicts"`
+	}
+	if err := json.Unmarshal([]byte(obj), &args); err != nil {
+		return nil, fmt.Errorf("could not parse JSON verdicts: %w", err)
+	}
+	if len(args.Verdicts) == 0 {
+		return nil, errors.New("JSON response contained no verdicts")
+	}
+	return args.Verdicts, nil
+}
+
+// extractJSONObject returns the substring from the first '{' to the last '}'.
+// This strips ```json fences, language tags, and any surrounding prose the
+// model added despite instructions. Returns "" when no object is present.
+func extractJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	end := strings.LastIndexByte(s, '}')
+	if start < 0 || end < 0 || end < start {
+		return ""
+	}
+	return s[start : end+1]
 }
 
 func applyVerdicts(groups []finding.Finding, verdicts map[string]finding.Verdict, reasons map[string]string, confs map[string]float64, model string) []finding.FinalFinding {
@@ -263,7 +344,7 @@ type groupPayload struct {
 	Sources        []string `json:"sources"`
 }
 
-func buildPrompt(groups []finding.Finding, diff string) (string, error) {
+func buildPrompt(groups []finding.Finding, diff string, useTools bool) (string, error) {
 	payloads := make([]groupPayload, 0, len(groups))
 	for _, g := range groups {
 		// Concatenate distinct member details (deduped sentences).
@@ -300,7 +381,14 @@ func buildPrompt(groups []finding.Finding, diff string) (string, error) {
 	}
 	b.WriteString("Candidate findings (JSON):\n```json\n")
 	b.Write(payloadJSON)
-	b.WriteString("\n```\n\nReturn exactly one tool call with the verdict for each group_id.")
+	b.WriteString("\n```\n\n")
+	if useTools {
+		b.WriteString("Return exactly one tool call with the verdict for each group_id.")
+	} else {
+		b.WriteString("Respond with ONLY a JSON object of this exact shape and nothing else:\n")
+		b.WriteString(`{"verdicts":[{"group_id":"<id>","verdict":"accepted_bug|rejected_fp|uncertain|style_only","reason":"<short>","confidence":0.0}]}` + "\n")
+		b.WriteString("Include one entry per group_id. Do not wrap it in markdown fences or add any commentary.")
+	}
 	return b.String(), nil
 }
 
@@ -346,7 +434,7 @@ const defaultSystemPrompt = `You are the arbiter for a multi-model code review. 
 - uncertain: ambiguous; needs human judgement
 - style_only: a low-priority style/nit comment, not a real bug
 
-Be strict. Prefer accepted_bug only when the diff clearly shows the defect. Reject overcautious or speculative findings. Return one tool call to arbiter_verdict containing one entry per group_id.`
+Be strict. Prefer accepted_bug only when the diff clearly shows the defect. Reject overcautious or speculative findings. Return one verdict entry per group_id.`
 
 var verdictToolDef = llm.ToolDef{
 	Type: "function",
