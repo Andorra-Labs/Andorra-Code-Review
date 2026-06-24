@@ -61,14 +61,21 @@ func isArbiterFallbackReason(reason string) bool {
 // injectArbiterOutageWarning appends a synthetic warning to the first
 // scanner's Warnings slice so aggregateWarnings surfaces it through both
 // stderr and the JSON `warnings` field. The warning is loud enough that a
-// user can't mistake an arbiter outage for a clean PR.
-func injectArbiterOutageWarning(res ensemble.Result, groupCount int) {
+// user can't mistake an arbiter outage for a clean PR. When arbiterErr is
+// non-nil its message is folded in so the PR comment states *why* the arbiter
+// produced no verdicts (e.g. an endpoint 4xx, no tool call) instead of an
+// opaque "call failed".
+func injectArbiterOutageWarning(res ensemble.Result, groupCount int, arbiterErr error) {
 	if len(res.Scanners) == 0 {
 		return
 	}
+	detail := "arbiter call failed or returned no verdicts"
+	if arbiterErr != nil {
+		detail = "arbiter call failed: " + arbiterErr.Error()
+	}
 	w := agent.AgentWarning{
 		Type:    "arbiter_failed",
-		Message: fmt.Sprintf("arbiter call failed or returned no verdicts — all %d candidate group(s) marked uncertain; rerun with --verdict-filter all to see the raw groups, or pick a different arbiter model", groupCount),
+		Message: fmt.Sprintf("%s — all %d candidate group(s) marked uncertain; rerun with --verdict-filter all to see the raw groups, or pick a different arbiter model", detail, groupCount),
 	}
 	res.Scanners[0].Warnings = append(res.Scanners[0].Warnings, w)
 }
@@ -202,10 +209,10 @@ func ensembleSummary(res ensemble.Result, finals []finding.FinalFinding) string 
 
 // ensembleJSON is the JSON envelope appended to upstream output for ensemble runs.
 type ensembleJSON struct {
-	Status   string                `json:"status"`
-	Comments []model.LlmComment    `json:"comments"`
-	Warnings []agent.AgentWarning  `json:"warnings,omitempty"`
-	Ensemble *ensembleJSONReport   `json:"ensemble,omitempty"`
+	Status   string               `json:"status"`
+	Comments []model.LlmComment   `json:"comments"`
+	Warnings []agent.AgentWarning `json:"warnings,omitempty"`
+	Ensemble *ensembleJSONReport  `json:"ensemble,omitempty"`
 }
 
 type ensembleJSONReport struct {
@@ -271,13 +278,13 @@ func arbiterStatus(usage finding.TokenUsage, finalCount int) string {
 
 // tokenRow is one row in the per-model token/cost summary table.
 type tokenRow struct {
-	Label    string             `json:"label"`     // "opus (scanner)" or "arbiter"
-	Model    string             `json:"model"`     // human-readable model id
-	Tokens   finding.TokenUsage `json:"tokens"`
-	IsLocal  bool               `json:"is_local"`
-	IsBedrock bool              `json:"is_bedrock"`
-	CostUSD  float64            `json:"cost_usd"` // 0 when not applicable
-	CostKnown bool              `json:"cost_known"`
+	Label     string             `json:"label"` // "opus (scanner)" or "arbiter"
+	Model     string             `json:"model"` // human-readable model id
+	Tokens    finding.TokenUsage `json:"tokens"`
+	IsLocal   bool               `json:"is_local"`
+	IsBedrock bool               `json:"is_bedrock"`
+	CostUSD   float64            `json:"cost_usd"` // 0 when not applicable
+	CostKnown bool               `json:"cost_known"`
 }
 
 // buildTokenRows compiles per-scanner + arbiter rows from the orchestrator
@@ -435,12 +442,17 @@ func fmtInt(n int64) string {
 }
 
 // writeDebugTrace dumps the per-scanner results + grouped findings to disk.
-func writeDebugTrace(path string, res ensemble.Result, finals []finding.FinalFinding) error {
+// arbiterErr, when non-nil, is recorded under "arbiter_error" so the cause of
+// an arbiter outage is preserved in the artifact for offline diagnosis.
+func writeDebugTrace(path string, res ensemble.Result, finals []finding.FinalFinding, arbiterErr error) error {
 	payload := map[string]any{
 		"scanners":     res.Scanners,
 		"raw_findings": res.Raw,
 		"groups":       finals,
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if arbiterErr != nil {
+		payload["arbiter_error"] = arbiterErr.Error()
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

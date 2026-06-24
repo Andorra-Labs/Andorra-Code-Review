@@ -10,6 +10,7 @@ package arbiter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,11 +22,11 @@ import (
 
 // Config configures one arbiter run.
 type Config struct {
-	Model       string
-	Mode        string  // "per_file" (default) | "per_group"
-	Temperature float64 // default 0
-	MaxTokens   int     // default 2048
-	SystemPrompt string // optional override; default is built-in
+	Model        string
+	Mode         string  // "per_file" (default) | "per_group"
+	Temperature  float64 // default 0
+	MaxTokens    int     // default 2048
+	SystemPrompt string  // optional override; default is built-in
 }
 
 // FromConfigStore converts a configstore.ArbiterSpec into Config defaults.
@@ -58,30 +59,47 @@ func FromConfigStore(spec configstore.ArbiterSpec, resolvedModel string) Config 
 // affected group is marked VerdictUncertain with VerdictReason populated; the
 // function still returns the partial findings + accumulated usage so the
 // caller can render degraded output.
-func Decide(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diffsByPath map[string]string) ([]finding.FinalFinding, finding.TokenUsage) {
+//
+// The returned error is non-nil when one or more arbiter calls failed (LLM
+// error, no tool call, unparseable verdicts). It is diagnostic only — the
+// findings/usage are always returned regardless — so callers can surface *why*
+// the arbiter produced no verdicts instead of reporting a silent outage. Each
+// failure is labelled by file path (per_file) or group id (per_group).
+func Decide(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diffsByPath map[string]string) ([]finding.FinalFinding, finding.TokenUsage, error) {
 	if len(groups) == 0 {
-		return nil, finding.TokenUsage{}
+		return nil, finding.TokenUsage{}, nil
 	}
 	out := make([]finding.FinalFinding, 0, len(groups))
 	var totalUsage finding.TokenUsage
+	var errs []error
 
 	switch cfg.Mode {
 	case "per_group":
 		for _, g := range groups {
-			verdict, reason, conf, usage := callArbiter(ctx, client, cfg, []finding.Finding{g}, diffsByPath[g.Path])
+			verdict, reason, conf, usage, err := callArbiter(ctx, client, cfg, []finding.Finding{g}, diffsByPath[g.Path])
 			totalUsage = totalUsage.Add(usage)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("group %s: %w", g.GroupID, err))
+			}
 			out = append(out, applyVerdicts([]finding.Finding{g}, verdict, reason, conf, cfg.Model)...)
 		}
 	default: // per_file
 		byPath := groupByPath(groups)
 		for _, path := range sortedPaths(byPath) {
 			pg := byPath[path]
-			verdict, reason, conf, usage := callArbiter(ctx, client, cfg, pg, diffsByPath[path])
+			verdict, reason, conf, usage, err := callArbiter(ctx, client, cfg, pg, diffsByPath[path])
 			totalUsage = totalUsage.Add(usage)
+			if err != nil {
+				label := path
+				if label == "" {
+					label = "(no path)"
+				}
+				errs = append(errs, fmt.Errorf("%s: %w", label, err))
+			}
 			out = append(out, applyVerdicts(pg, verdict, reason, conf, cfg.Model)...)
 		}
 	}
-	return out, totalUsage
+	return out, totalUsage, errors.Join(errs...)
 }
 
 func groupByPath(groups []finding.Finding) map[string][]finding.Finding {
@@ -110,8 +128,11 @@ type rawVerdict struct {
 
 // callArbiter returns the per-group verdict/reason/confidence maps plus the
 // token usage reported by the LLM for this single call. Empty maps signal
-// failure; applyVerdicts then assigns VerdictUncertain.
-func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diff string) (map[string]finding.Verdict, map[string]string, map[string]float64, finding.TokenUsage) {
+// failure; applyVerdicts then assigns VerdictUncertain. The returned error,
+// when non-nil, explains *why* no verdicts came back (LLM error, no tool call,
+// unparseable arguments) so the caller can surface it instead of treating
+// every failure as an opaque outage.
+func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups []finding.Finding, diff string) (map[string]finding.Verdict, map[string]string, map[string]float64, finding.TokenUsage, error) {
 	verdicts := map[string]finding.Verdict{}
 	reasons := map[string]string{}
 	confs := map[string]float64{}
@@ -119,7 +140,7 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 
 	prompt, err := buildPrompt(groups, diff)
 	if err != nil {
-		return verdicts, reasons, confs, usage
+		return verdicts, reasons, confs, usage, fmt.Errorf("build prompt: %w", err)
 	}
 
 	systemPrompt := cfg.SystemPrompt
@@ -139,8 +160,11 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 		MaxTokens:   cfg.MaxTokens,
 	}
 	resp, err := client.CompletionsWithCtx(ctx, req)
-	if err != nil || resp == nil {
-		return verdicts, reasons, confs, usage
+	if err != nil {
+		return verdicts, reasons, confs, usage, fmt.Errorf("LLM call failed: %w", err)
+	}
+	if resp == nil {
+		return verdicts, reasons, confs, usage, errors.New("LLM call returned no response")
 	}
 	if resp.Usage != nil {
 		usage = finding.TokenUsage{
@@ -152,16 +176,20 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 	}
 	calls := resp.ToolCalls()
 	if len(calls) == 0 {
-		return verdicts, reasons, confs, usage
+		return verdicts, reasons, confs, usage, errors.New("response contained no tool call (model may have replied in prose)")
 	}
+	var parseErr error
+	sawVerdictTool := false
 	for _, call := range calls {
 		if call.Function.Name != "arbiter_verdict" {
 			continue
 		}
+		sawVerdictTool = true
 		var args struct {
 			Verdicts []rawVerdict `json:"verdicts"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			parseErr = fmt.Errorf("could not parse arbiter_verdict arguments: %w", err)
 			continue
 		}
 		for _, v := range args.Verdicts {
@@ -178,7 +206,19 @@ func callArbiter(ctx context.Context, client llm.LLMClient, cfg Config, groups [
 			}
 		}
 	}
-	return verdicts, reasons, confs, usage
+	// Any parsed verdict means a usable response; report success even if some
+	// entries were malformed.
+	if len(verdicts) > 0 {
+		return verdicts, reasons, confs, usage, nil
+	}
+	switch {
+	case parseErr != nil:
+		return verdicts, reasons, confs, usage, parseErr
+	case !sawVerdictTool:
+		return verdicts, reasons, confs, usage, errors.New("response made tool call(s) but none named arbiter_verdict")
+	default:
+		return verdicts, reasons, confs, usage, errors.New("arbiter_verdict call contained no usable verdicts")
+	}
 }
 
 func applyVerdicts(groups []finding.Finding, verdicts map[string]finding.Verdict, reasons map[string]string, confs map[string]float64, model string) []finding.FinalFinding {

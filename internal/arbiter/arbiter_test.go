@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/open-code-review/open-code-review/internal/configstore"
@@ -79,7 +80,7 @@ func TestDecideSuccessfulPerFile(t *testing.T) {
 			{GroupID: "g-1", Verdict: "rejected_fp", Reason: "constant condition", Confidence: 0.8},
 		}),
 	}
-	out, _ := Decide(context.Background(), client, Config{Model: "claude-opus-4-8", Mode: "per_file"}, groups, nil)
+	out, _, _ := Decide(context.Background(), client, Config{Model: "claude-opus-4-8", Mode: "per_file"}, groups, nil)
 	if client.calls != 1 {
 		t.Errorf("calls=%d, want 1 for per_file with single path", client.calls)
 	}
@@ -145,7 +146,7 @@ func TestDecideMissingVerdictsBecomeUncertain(t *testing.T) {
 			// g-1 omitted
 		}),
 	}
-	out, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	out, _, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
 	if out[1].Verdict != finding.VerdictUncertain {
 		t.Errorf("g-1 verdict=%s", out[1].Verdict)
 	}
@@ -163,7 +164,10 @@ func TestDecideLLMErrorAllUncertain(t *testing.T) {
 		mkGroup("g-1", "b.go", "y", 1, 1),
 	}
 	client := &fakeClient{err: errors.New("rate limited")}
-	out, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	out, _, err := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	if err == nil || !strings.Contains(err.Error(), "rate limited") {
+		t.Errorf("Decide error = %v, want it to surface the underlying %q cause", err, "rate limited")
+	}
 	if len(out) != 2 {
 		t.Fatalf("len=%d", len(out))
 	}
@@ -190,7 +194,10 @@ func TestDecideMalformedToolCallAllUncertain(t *testing.T) {
 			}},
 		},
 	}
-	out, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	out, _, err := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	if err == nil {
+		t.Error("Decide error = nil, want a parse error for the malformed tool call")
+	}
 	if out[0].Verdict != finding.VerdictUncertain {
 		t.Errorf("verdict=%s, want uncertain", out[0].Verdict)
 	}
@@ -198,7 +205,10 @@ func TestDecideMalformedToolCallAllUncertain(t *testing.T) {
 
 func TestDecideEmptyGroupsNoCall(t *testing.T) {
 	client := &fakeClient{}
-	out, usage := Decide(context.Background(), client, Config{}, nil, nil)
+	out, usage, err := Decide(context.Background(), client, Config{}, nil, nil)
+	if err != nil {
+		t.Errorf("err=%v, want nil for empty groups", err)
+	}
 	if out != nil {
 		t.Errorf("expected nil output, got %+v", out)
 	}
@@ -215,7 +225,7 @@ func TestDecideClampsConfidence(t *testing.T) {
 	client := &fakeClient{
 		resp: mkResp([]rawVerdict{{GroupID: "g-0", Verdict: "accepted_bug", Confidence: 2.5}}),
 	}
-	out, _ := Decide(context.Background(), client, Config{}, groups, nil)
+	out, _, _ := Decide(context.Background(), client, Config{}, groups, nil)
 	if out[0].Confidence != 1.0 {
 		t.Errorf("confidence=%f, want 1.0", out[0].Confidence)
 	}
@@ -227,7 +237,7 @@ func TestDecideAccumulatesUsage(t *testing.T) {
 		mkGroup("g-1", "b.go", "y", 5, 5),
 	}
 	client := &usageClient{usage: &llm.UsageInfo{PromptTokens: 100, CompletionTokens: 20, CacheReadTokens: 30}}
-	_, total := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
+	_, total, _ := Decide(context.Background(), client, Config{Mode: "per_file"}, groups, nil)
 	// per_file mode: one call per path (two paths) → usage is doubled
 	if total.InputTokens != 200 || total.OutputTokens != 40 || total.CacheReadTokens != 60 {
 		t.Errorf("usage=%+v, want 200/40/60", total)
