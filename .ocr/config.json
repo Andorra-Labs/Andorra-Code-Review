@@ -7,27 +7,31 @@
       "models": [
         "${env:OCR_SPARK_LLM_MODEL}"
       ]
+    },
+    "Runpod": {
+      "protocol": "openai",
+      "url": "https://api.runpod.ai/v2/jhu2zwcytvcjnk/openai/v1",
+      "api_key": "${env:OCR_RUNPOD_API_KEY}",
+      "models": [
+        "${env:OCR_RUNPOD_LLM_MODEL}"
+      ]
     }
   },
-  "provider": "Spark",
-  "model": "${env:OCR_SPARK_LLM_MODEL}",
-  "llm": {
-    "timeout": 1500
-  },
+  "provider": "Runpod",
+  "model": "${env:OCR_RUNPOD_LLM_MODEL}",
   "ensemble": {
-    "enabled": false,
     "serial": true,
     "scanners": [
       {
-        "name": "spark",
-        "provider": "Spark",
-        "model": "${env:OCR_SPARK_LLM_MODEL}",
+        "name": "Runpod",
+        "provider": "Runpod",
+        "model": "${env:OCR_RUNPOD_LLM_MODEL}",
         "exhaustive": true
       }
     ],
     "arbiter": {
-      "provider": "Spark",
-      "model": "${env:OCR_SPARK_LLM_MODEL}"
+      "provider": "Runpod",
+      "model": "${env:OCR_RUNPOD_LLM_MODEL}"
     }
   }
 }
