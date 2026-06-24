@@ -370,10 +370,13 @@ jobs:
           # naming convention (see internal/configstore/export.go's
           # envForProviderKey) without us caring which providers exist.
           ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
-          # Non-secret model id, supplied via an org/repo variable, so the
-          # config can reference "${env:OCR_SPARK_LLM_MODEL}" instead of
-          # hardcoding the model. vars resolves org-level variables too.
-          OCR_SPARK_LLM_MODEL: ${{ vars.OCR_SPARK_LLM_MODEL }}
+          # Non-secret model ids, supplied via org/repo variables, so the
+          # config can reference "${env:OCR_<PROVIDER>_LLM_MODEL}" instead
+          # of hardcoding the model. Forwarded as a blob (mirroring
+          # ALL_SECRETS_JSON) and derived per-provider in the run script
+          # below, so switching providers in .ocr/config.json never forces
+          # a workflow edit. vars resolves org-level variables too.
+          ALL_VARS_JSON: ${{ toJSON(vars) }}
           # Per-request LLM timeout in seconds. Forwarded here (not derived from
           # the secrets blob like the API keys) so a repo/org variable can raise
           # it above the 5-minute client default for slow self-hosted models —
@@ -428,6 +431,14 @@ jobs:
               echo "::add-mask::$value"
               export "${var_name}=${value}"
             fi
+            # Non-secret model id for the same provider, derived from the
+            # vars blob the same way. Not masked — model ids aren't secret.
+            model_var="OCR_${upper}_LLM_MODEL"
+            model_value=$(printf '%s' "$ALL_VARS_JSON" \
+              | jq -r --arg k "$model_var" '.[$k] // empty')
+            if [ -n "$model_value" ]; then
+              export "${model_var}=${model_value}"
+            fi
           done
 
           # OCR_BEDROCK_REGION is the one non-key env var the resolver
@@ -438,8 +449,8 @@ jobs:
           if [ -n "$region" ]; then
             export OCR_BEDROCK_REGION="$region"
           fi
-          # Don't leak the JSON blob to the child process.
-          unset ALL_SECRETS_JSON
+          # Don't leak the JSON blobs to the child process.
+          unset ALL_SECRETS_JSON ALL_VARS_JSON
 
           # --debug-trace is written even when every scanner fails, and stderr
           # is captured to a file so failures can be diagnosed from artifacts.
