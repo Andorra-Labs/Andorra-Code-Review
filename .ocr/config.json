@@ -11,7 +11,7 @@
     "MarkSpark": {
       "protocol": "openai",
       "url": "http://gx10-0c8f.tailb146aa.ts.net:8888/v1",
-      "api_key": "${env:OCR_SPARK_API_KEY}",
+      "api_key": "${env:OCR_MARKSPARK_API_KEY}",
       "models": [
         "${env:OCR_SPARK_LLM_MODEL}"
       ]
