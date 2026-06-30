@@ -8,6 +8,14 @@
         "${env:OCR_SPARK_LLM_MODEL}"
       ]
     },
+    "MarkSpark": {
+      "protocol": "openai",
+      "url": "http://gx10-0c8f.tailb146aa.ts.net:8888/v1",
+      "api_key": "${env:OCR_SPARK_API_KEY}",
+      "models": [
+        "${env:OCR_SPARK_LLM_MODEL}"
+      ]
+    },
     "Runpod": {
       "protocol": "openai",
       "url": "https://api.runpod.ai/v2/jhu2zwcytvcjnk/openai/v1",
@@ -17,21 +25,21 @@
       ]
     }
   },
-  "provider": "Runpod",
-  "model": "${env:OCR_RUNPOD_LLM_MODEL}",
+  "provider": "MarkSpark",
+  "model": "${env:OCR_SPARK_LLM_MODEL}",
   "ensemble": {
     "serial": true,
     "scanners": [
       {
-        "name": "Runpod",
-        "provider": "Runpod",
-        "model": "${env:OCR_RUNPOD_LLM_MODEL}",
+        "name": "MarkSpark",
+        "provider": "MarkSpark",
+        "model": "${env:OCR_SPARK_LLM_MODEL}",
         "exhaustive": true
       }
     ],
     "arbiter": {
-      "provider": "Runpod",
-      "model": "${env:OCR_RUNPOD_LLM_MODEL}"
+      "provider": "MarkSpark",
+      "model": "${env:OCR_SPARK_LLM_MODEL}"
     }
   }
 }
