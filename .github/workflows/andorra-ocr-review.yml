@@ -200,67 +200,58 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Resolve Tailscale OAuth credentials (pick TS or TS2 via TAILSCALE_ID)
+      - name: Validate Tailscale OAuth selection (TAILSCALE_ID picks TS or TS2)
         if: steps.detect.outputs.present == 'true'
-        id: tailscale
         env:
           # TAILSCALE_ID is an org/repo variable that selects WHICH Tailscale
-          # OAuth client this run uses:
+          # OAuth client the connect step below uses:
           #   "TS"  -> TS_OAUTH_CLIENT_ID  / TS_OAUTH_SECRET   (default)
           #   "TS2" -> TS2_OAUTH_CLIENT_ID / TS2_OAUTH_SECRET
           # When TAILSCALE_ID is unset/empty we fall back to "TS", preserving
           # the original single-Tailscale behavior.
           #
-          # Both credential pairs are forwarded here — preferring org/repo
-          # variables and falling back to secrets for repos that have not
-          # migrated yet — and the actual selection happens in the shell below,
-          # because GitHub expression syntax can't index secrets/vars by a
-          # name computed from TAILSCALE_ID.
+          # The actual selection is done with a GitHub expression in the connect
+          # step's `with:` inputs (see below), not here: a masked value written
+          # to $GITHUB_OUTPUT is dropped by the runner ("Skip output … since it
+          # may contain secret"), so passing the chosen credentials through a
+          # step output would deliver empty strings to tailscale/github-action.
+          # This step only validates the selector and prints diagnostics; the
+          # selected credential lengths are echoed from the resolved env so a
+          # missing/empty pair is obvious in the logs.
           TAILSCALE_ID: ${{ vars.TAILSCALE_ID }}
-          TS_OAUTH_CLIENT_ID: ${{ vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ vars.TS_OAUTH_SECRET || secrets.TS_OAUTH_SECRET }}
-          TS2_OAUTH_CLIENT_ID: ${{ vars.TS2_OAUTH_CLIENT_ID || secrets.TS2_OAUTH_CLIENT_ID }}
-          TS2_OAUTH_SECRET: ${{ vars.TS2_OAUTH_SECRET || secrets.TS2_OAUTH_SECRET }}
+          SELECTED_CLIENT_ID: ${{ vars.TAILSCALE_ID == 'TS2' && (vars.TS2_OAUTH_CLIENT_ID || secrets.TS2_OAUTH_CLIENT_ID) || (vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID) }}
+          SELECTED_SECRET: ${{ vars.TAILSCALE_ID == 'TS2' && (vars.TS2_OAUTH_SECRET || secrets.TS2_OAUTH_SECRET) || (vars.TS_OAUTH_SECRET || secrets.TS_OAUTH_SECRET) }}
         run: |
           set -euo pipefail
-          # Default to "TS" when TAILSCALE_ID is unset or empty.
+          # Default to "TS" when TAILSCALE_ID is unset or empty, then reject
+          # anything that isn't a known client so a typo fails loudly here
+          # instead of silently connecting to the wrong tailnet.
           sel="${TAILSCALE_ID:-TS}"
           case "$sel" in
-            TS)
-              client_id="$TS_OAUTH_CLIENT_ID"
-              secret="$TS_OAUTH_SECRET"
-              ;;
-            TS2)
-              client_id="$TS2_OAUTH_CLIENT_ID"
-              secret="$TS2_OAUTH_SECRET"
-              ;;
+            TS|TS2) ;;
             *)
               echo "::error::Unknown TAILSCALE_ID '$sel' — expected 'TS' or 'TS2'."
               exit 1
               ;;
           esac
-          # Mask both values before emitting them so neither leaks in any
-          # later log line, then hand them to downstream steps as (masked)
-          # step outputs.
-          echo "::add-mask::$client_id"
-          echo "::add-mask::$secret"
-          {
-            echo "client_id=$client_id"
-            echo "secret=$secret"
-          } >> "$GITHUB_OUTPUT"
           # Diagnostic: confirm which client was selected and that both values
           # resolved to non-empty. Lengths only; the values stay masked.
           echo "Selected Tailscale OAuth client: $sel"
-          echo "Resolved oauth-client-id length: ${#client_id}"
-          echo "Resolved oauth-secret length: ${#secret}"
+          echo "Resolved oauth-client-id length: ${#SELECTED_CLIENT_ID}"
+          echo "Resolved oauth-secret length: ${#SELECTED_SECRET}"
 
       - name: Connect to Tailscale (so the runner can reach *.ts.net hosts
               like the Spark LLM endpoint configured in .ocr/config.json)
         if: steps.detect.outputs.present == 'true'
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ steps.tailscale.outputs.client_id }}
-          oauth-secret: ${{ steps.tailscale.outputs.secret }}
+          # Pick TS2_* when TAILSCALE_ID == "TS2", otherwise TS_* (covers the
+          # unset/empty default). Each pair prefers the org/repo variable and
+          # falls back to the secret. Selecting in the expression — rather than
+          # via a prior step's output — avoids the masked-output drop described
+          # in the validate step above.
+          oauth-client-id: ${{ vars.TAILSCALE_ID == 'TS2' && (vars.TS2_OAUTH_CLIENT_ID || secrets.TS2_OAUTH_CLIENT_ID) || (vars.TS_OAUTH_CLIENT_ID || secrets.TS_OAUTH_CLIENT_ID) }}
+          oauth-secret: ${{ vars.TAILSCALE_ID == 'TS2' && (vars.TS2_OAUTH_SECRET || secrets.TS2_OAUTH_SECRET) || (vars.TS_OAUTH_SECRET || secrets.TS_OAUTH_SECRET) }}
           tags: tag:ci
 
       - name: Resolve Andorra Review HEAD SHA (cache key source)
